@@ -114,6 +114,30 @@ def parse_args(argv=None):
     parser.add_argument('--emulate_playback', default=False, dest='emulate_playback', action='store_true',
                         help='When saving a video, emulate the framerate that you\'d get running in real-time mode.')
 
+    # Torch2TRT options
+    parser.add_argument('--torch2trt_max_calibration_images', type=int, default=5,
+                        help='Number of calibration images used for tuning the INT8 backbone.')
+
+    parser.add_argument('--torch2trt_backbone', default=False, action='store_true',
+                        help='Converts the Backbone to a TRTModule with FP16 weights.')
+    parser.add_argument('--torch2trt_backbone_int8', default=False, action='store_true',
+                        help='Converts the Backbone to a TRTModule with INT8 weights.')
+
+    parser.add_argument('--torch2trt_protonet', default=False, action='store_true',
+                        help='Converts ProtoNet to a TRTModule with FP16 weights.')
+    parser.add_argument('--torch2trt_protonet_int8', default=False, action='store_true',
+                        help='Converts ProtoNet to a TRTModule with INT8 weights.')
+
+    parser.add_argument('--torch2trt_fpn', default=False, action='store_true',
+                        help='Converts the FPN to a TRTModule with FP16 weights.')
+    parser.add_argument('--torch2trt_fpn_int8', default=False, action='store_true',
+                        help='Converts the FPN to a TRTModule with INT8 weights.')
+
+    parser.add_argument('--torch2trt_prediction_module', default=False, action='store_true',
+                        help='Converts the PredictionModule to a TRTModule with FP16 weights.')
+    parser.add_argument('--torch2trt_prediction_module_int8', default=False, action='store_true',
+                        help='Converts the PredictionModule to a TRTModule with INT8 weights.')
+
     parser.set_defaults(no_bar=False, display=False, resume=False, output_coco_json=False, output_web_json=False, shuffle=False,
                         benchmark=False, no_sort=False, no_hash=False, mask_proto_debug=False, crop=True, detect=False, display_fps=False,
                         emulate_playback=False)
@@ -157,6 +181,7 @@ def prep_display(dets_out, img, h, w, undo_transform=True, class_color=False, ma
         if cfg.eval_mask_branch:
             # Masks are drawn on the GPU, so don't copy
             masks = t[3][idx]
+
         classes, scores, boxes = [x[idx].cpu().numpy() for x in t[:3]]
 
     num_dets_to_consider = min(args.top_k, classes.shape[0])
@@ -276,9 +301,9 @@ def prep_benchmark(dets_out, h, w):
         boxes = boxes.cpu().numpy()
         masks = masks.cpu().numpy()
     
-    with timer.env('Sync'):
-        # Just in case
-        torch.cuda.synchronize()
+    # with timer.env('Sync'):
+        # # Just in case
+        # torch.cuda.synchronize()
 
 def prep_coco_cats():
     """ Prepare inverted table for category id lookup given a coco cats object. """
@@ -641,7 +666,8 @@ def evalvideo(net:Yolact, path:str, out_path:str=None):
     cudnn.benchmark = True
     
     if is_webcam:
-        vid = cv2.VideoCapture(int(path))
+        # vid = cv2.VideoCapture(int(path))
+        vid = cv2.VideoCapture(-1)
     else:
         vid = cv2.VideoCapture(path)
     
@@ -925,7 +951,13 @@ def evaluate(net:Yolact, dataset, train_mode=False):
         hashed = [badhash(x) for x in dataset.ids]
         dataset_indices.sort(key=lambda x: hashed[x])
 
-    dataset_indices = dataset_indices[:dataset_size]
+
+    if args.torch2trt_backbone_int8:
+        calib_total = args.torch2trt_max_calibration_images
+        dataset_indices = dataset_indices[calib_total:dataset_size+calib_total]
+    else:
+        dataset_indices = dataset_indices[:dataset_size]
+
 
     try:
         # Main eval loop
@@ -1090,6 +1122,9 @@ if __name__ == '__main__':
             dataset = COCODetection(cfg.dataset.valid_images, cfg.dataset.valid_info,
                                     transform=BaseTransform(), has_gt=cfg.dataset.has_gt)
             prep_coco_cats()
+        elif args.torch2trt_backbone_int8:
+            dataset = COCODetection(cfg.dataset.valid_images, cfg.dataset.valid_info,
+                                    transform=BaseTransform(), has_gt=cfg.dataset.has_gt)
         else:
             dataset = None        
 
@@ -1097,6 +1132,28 @@ if __name__ == '__main__':
         net = Yolact()
         net.load_weights(args.trained_model)
         net.eval()
+
+        calibration_dataset = None
+        if args.torch2trt_backbone_int8:
+            print('Calibrating with {} images...'.format(args.torch2trt_max_calibration_images))
+            dataset_indices = list(range(args.torch2trt_max_calibration_images))
+            dataset_indices = dataset_indices[:args.torch2trt_max_calibration_images]
+            calibration_dataset = [dataset.pull_item(image_idx)[0] for image_idx in dataset_indices]
+            calibration_dataset = torch.stack(calibration_dataset)
+
+        if args.torch2trt_backbone or args.torch2trt_backbone_int8:
+            net.to_tensorrt_backbone(args.torch2trt_backbone_int8, calibration_dataset=calibration_dataset)
+
+        if args.torch2trt_protonet or args.torch2trt_protonet_int8:
+            net.to_tensorrt_protonet(args.torch2trt_protonet_int8)
+            
+        if args.torch2trt_fpn or args.torch2trt_fpn_int8:
+            net.fpn.to_tensorrt(args.torch2trt_fpn_int8)
+
+        if args.torch2trt_prediction_module or args.torch2trt_prediction_module_int8:
+            for prediction_layer in net.prediction_layers:
+                prediction_layer.to_tensorrt(args.torch2trt_prediction_module_int8)
+
         print(' Done.')
 
         if args.cuda:

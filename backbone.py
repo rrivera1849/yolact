@@ -490,8 +490,7 @@ class InvertedResidual(nn.Module):
             # dw
             ConvBNReLU(hidden_dim, hidden_dim, stride=stride, groups=hidden_dim),
             # pw-linear
-            nn.Conv2d(hidden_dim, oup, 1, 1, 0, bias=False),
-            nn.BatchNorm2d(oup),
+            nn.Conv2d(hidden_dim, oup, 1, 1, 0, bias=False), nn.BatchNorm2d(oup),
         ])
         self.conv = nn.Sequential(*layers)
 
@@ -507,29 +506,21 @@ class MobileNetV2Backbone(nn.Module):
     Adapted from torchvision.models.mobilenet.MobileNetV2
     """
     def __init__(self,
-                 num_classes=1000,
                  width_mult=1.0,
                  inverted_residual_setting=None,
                  round_nearest=8,
                  block=InvertedResidual):
-        super(MobileNetV2, self).__init__()
+        super(MobileNetV2Backbone, self).__init__()
 
         input_channel = 32
         last_channel = 1280
+        self.channels = []
 
         self.layers = nn.ModuleList()
 
         if inverted_residual_setting is None:
-            inverted_residual_setting = [
-                # t, c, n, s
-                [1, 16, 1, 1],
-                [6, 24, 2, 2],
-                [6, 32, 3, 2],
-                [6, 64, 4, 2],
-                [6, 96, 3, 1],
-                [6, 160, 3, 2],
-                [6, 320, 1, 1],
-            ]
+            raise ValueError("Must provide inverted_residual_setting where each element is a list "
+                             "that represents the MobileNetV2 t,c,n,s values for that layer.")
 
         # only check the first element, assuming user knows t,c,n,s are required
         if len(inverted_residual_setting) == 0 or len(inverted_residual_setting[0]) != 4:
@@ -540,19 +531,20 @@ class MobileNetV2Backbone(nn.Module):
         input_channel = _make_divisible(input_channel * width_mult, round_nearest)
         self.last_channel = _make_divisible(last_channel * max(1.0, width_mult), round_nearest)
         self.layers.append(ConvBNReLU(3, input_channel, stride=2))
+        self.channels.append(input_channel)
 
         # building inverted residual blocks
         for t, c, n, s in inverted_residual_setting:
             input_channel = self._make_layer(input_channel, width_mult, round_nearest, t, c, n, s, block)
+            self.channels.append(input_channel)
 
         # building last several layers
         self.layers.append(ConvBNReLU(input_channel, self.last_channel, kernel_size=1))
+        self.channels.append(self.last_channel)
 
-        # building classifier
-        self.classifier = nn.Sequential(
-            nn.Dropout(0.2),
-            nn.Linear(self.last_channel, num_classes),
-        )
+        # These modules will be initialized by init_backbone,
+        # so don't overwrite their initialization later.
+        self.backbone_modules = [m for m in self.modules() if isinstance(m, nn.Conv2d)]
 
 
     def _make_layer(self, input_channel, width_mult, round_nearest, t, c, n, s, block):
@@ -587,6 +579,31 @@ class MobileNetV2Backbone(nn.Module):
         """TODO: Need to make sure that this works as intended.
         """
         self._make_layer(conv_channels, 1.0, 8, t, c, n, s, InvertedResidual)
+
+    def init_backbone(self, path):
+        """ Initializes the backbone weights for training. """
+        checkpoint = torch.load(path)
+        # The last two elements are the classifier so chop it off.
+        checkpoint_keys = list(checkpoint.keys())[:-2]
+        transform_dict = dict(zip(list(self.state_dict().keys()), checkpoint_keys))
+
+        state_dict = OrderedDict([(transform_dict[k], v) for k,v in self.state_dict().items()])
+        self.load_state_dict(state_dict, strict=False)
+
+if __name__ == "__main__":
+    mobilenetv2_arch = [
+        # t, c, n, s
+        [1, 16, 1, 1],
+        [6, 24, 2, 2],
+        [6, 32, 3, 2],
+        [6, 64, 4, 2],
+        [6, 96, 3, 1],
+        [6, 160, 3, 2],
+        [6, 320, 1, 1],
+    ]
+
+    import pdb; pdb.set_trace() 
+    model = MobileNetV2Backbone(inverted_residual_setting=mobilenetv2_arch)
 
 
 def construct_backbone(cfg):

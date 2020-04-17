@@ -1,4 +1,4 @@
-from backbone import ResNetBackbone, VGGBackbone, ResNetBackboneGN, DarkNetBackbone
+from backbone import ResNetBackbone, VGGBackbone, ResNetBackboneGN, DarkNetBackbone, MobileNetV2Backbone
 from math import sqrt
 import torch
 
@@ -109,11 +109,11 @@ dataset_base = Config({
     'name': 'Base Dataset',
 
     # Training images and annotations
-    'train_images': './data/coco/images/',
+    'train_images': '/work/riverasoto1/coco/images/',
     'train_info':   'path_to_annotation_file',
 
     # Validation images and annotations.
-    'valid_images': './data/coco/images/',
+    'valid_images': '/work/riverasoto1/coco/images/',
     'valid_info':   'path_to_annotation_file',
 
     # Whether or not to load GT. If this is False, eval.py quantitative evaluation won't work.
@@ -131,8 +131,8 @@ dataset_base = Config({
 coco2014_dataset = dataset_base.copy({
     'name': 'COCO 2014',
     
-    'train_info': './data/coco/annotations/instances_train2014.json',
-    'valid_info': './data/coco/annotations/instances_val2014.json',
+    'train_info': '/work/riverasoto1/coco/annotations/instances_train2014.json',
+    'valid_info': '/work/riverasoto1/coco/annotations/instances_val2014.json',
 
     'label_map': COCO_LABEL_MAP
 })
@@ -140,8 +140,8 @@ coco2014_dataset = dataset_base.copy({
 coco2017_dataset = dataset_base.copy({
     'name': 'COCO 2017',
     
-    'train_info': './data/coco/annotations/instances_train2017.json',
-    'valid_info': './data/coco/annotations/instances_val2017.json',
+    'train_info': '/work/riverasoto1/coco/annotations/instances_train2017.json',
+    'valid_info': '/work/riverasoto1/coco/annotations/instances_val2017.json',
 
     'label_map': COCO_LABEL_MAP
 })
@@ -149,7 +149,7 @@ coco2017_dataset = dataset_base.copy({
 coco2017_testdev_dataset = dataset_base.copy({
     'name': 'COCO 2017 Test-Dev',
 
-    'valid_info': './data/coco/annotations/image_info_test-dev2017.json',
+    'valid_info': '/work/riverasoto1/coco/annotations/image_info_test-dev2017.json',
     'has_gt': False,
 
     'label_map': COCO_LABEL_MAP
@@ -201,7 +201,12 @@ darknet_transform = Config({
     'to_float': True,
 })
 
-
+mobilenetv2_transform = Config({
+    'channel_order': 'RGB',
+    'normalize': False,
+    'substract_means': False,
+    'to_float': False,
+})
 
 
 
@@ -298,8 +303,29 @@ vgg16_backbone = backbone_base.copy({
     'pred_aspect_ratios': [ [[1], [1, sqrt(2), 1/sqrt(2), sqrt(3), 1/sqrt(3)][:n]] for n in [3, 5, 5, 5, 3, 3] ],
 })
 
+mobilenetv2_arch = [
+    # t, c, n, s
+    [1, 16, 1, 1],
+    [6, 24, 2, 2],
+    [6, 32, 3, 2],
+    [6, 64, 4, 2],
+    [6, 96, 3, 1],
+    [6, 160, 3, 2],
+    [6, 320, 1, 1],
+]
 
+mobilenetv2_backbone = backbone_base.copy({
+    'name': 'MobileNetV2',
+    'path': 'mobilenet_v2-b0353104.pth',
+    'type': MobileNetV2Backbone,
+    'args': (1.0, mobilenetv2_arch, 8),
+    'transform': mobilenetv2_transform,
 
+    # TODO
+    # 'selected_layers' : list(range(2, 8)),
+    # 'pred_scales': [[5, 4]]*6,
+    # 'pred_aspect_ratios': [ [[1], [1, sqrt(2), 1/sqrt(2), sqrt(3), 1/sqrt(3)][:n]] for n in [3, 5, 5, 5, 3, 3] ],
+})
 
 
 # ----------------------- MASK BRANCH TYPES ----------------------- #
@@ -750,7 +776,6 @@ yolact_resnet50_config = yolact_base_config.copy({
     }),
 })
 
-
 yolact_resnet50_pascal_config = yolact_resnet50_config.copy({
     'name': None, # Will default to yolact_resnet50_pascal
     
@@ -802,6 +827,22 @@ yolact_plus_resnet50_config = yolact_plus_base_config.copy({
         'use_pixel_scales': True,
         'preapply_sqrt': False,
         'use_square_anchors': False,
+    }),
+})
+
+# ----------------------- YOLACT EMBEDDED CONFIGS ----------------------- #
+
+yolact_mobilenetv2_config = yolact_base_config.copy({
+    'name': 'yolact_resnet50',
+
+    'backbone': mobilenetv2_backbone.copy({
+        'selected_layers': list(range(1, 4)),
+        
+        'pred_scales': yolact_base_config.backbone.pred_scales,
+        'pred_aspect_ratios': yolact_base_config.backbone.pred_aspect_ratios,
+        'use_pixel_scales': True,
+        'preapply_sqrt': False,
+        'use_square_anchors': True, # This is for backward compatability with a bug
     }),
 })
 

@@ -380,13 +380,16 @@ class FPN(ScriptModuleWrapper):
         x = torch.ones((1, 256, 69, 69)).cuda()
         self.pred_layers[2] = trt_fn(self.pred_layers[2], [x])
 
-        x = torch.ones((1, 2048, 18, 18)).cuda()
+        # x = torch.ones((1, 2048, 18, 18)).cuda()
+        x = torch.ones((1, 160, 18, 18)).cuda()
         self.lat_layers[0] = trt_fn(self.lat_layers[0], [x])
 
-        x = torch.ones((1, 1024, 35, 35)).cuda()
+        # x = torch.ones((1, 1024, 35, 35)).cuda()
+        x = torch.ones((1, 64, 35, 35)).cuda()
         self.lat_layers[1] = trt_fn(self.lat_layers[1], [x])
 
-        x = torch.ones((1, 512, 69, 69)).cuda()
+        # x = torch.ones((1, 512, 69, 69)).cuda()
+        x = torch.ones((1, 32, 69, 69)).cuda()
         self.lat_layers[2] = trt_fn(self.lat_layers[2], [x])
 
     # TODO: This is commented since the FPN is incompatible with TensorRT.
@@ -655,6 +658,7 @@ class Yolact(nn.Module):
 
         with timer.env('backbone'):
             outs = self.backbone(x)
+
 
         if cfg.fpn is not None:
             with timer.env('fpn'):

@@ -203,8 +203,8 @@ darknet_transform = Config({
 
 mobilenetv2_transform = Config({
     'channel_order': 'RGB',
-    'normalize': False,
-    'substract_means': False,
+    'normalize': True,
+    'subtract_means': False,
     'to_float': False,
 })
 
@@ -833,10 +833,10 @@ yolact_plus_resnet50_config = yolact_plus_base_config.copy({
 # ----------------------- YOLACT EMBEDDED CONFIGS ----------------------- #
 
 yolact_mobilenetv2_config = yolact_base_config.copy({
-    'name': 'yolact_resnet50',
+    'name': 'yolact_mobilenetv2',
 
     'backbone': mobilenetv2_backbone.copy({
-        'selected_layers': list(range(1, 4)),
+        'selected_layers': [3, 4, 6],
         
         'pred_scales': yolact_base_config.backbone.pred_scales,
         'pred_aspect_ratios': yolact_base_config.backbone.pred_aspect_ratios,

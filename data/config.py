@@ -109,11 +109,11 @@ dataset_base = Config({
     'name': 'Base Dataset',
 
     # Training images and annotations
-    'train_images': '/media/rrivera/3BC63CFE33753570/data/coco/images/',
+    'train_images': '/work/riverasoto1/coco/images/',
     'train_info':   'path_to_annotation_file',
 
     # Validation images and annotations.
-    'valid_images': '/media/rrivera/3BC63CFE33753570/data/coco/images/',
+    'valid_images': '/work/riverasoto1/coco/images/',
     'valid_info':   'path_to_annotation_file',
 
     # Whether or not to load GT. If this is False, eval.py quantitative evaluation won't work.
@@ -131,8 +131,8 @@ dataset_base = Config({
 coco2014_dataset = dataset_base.copy({
     'name': 'COCO 2014',
     
-    'train_info': '/media/rrivera/3BC63CFE33753570/data/coco/annotations/instances_train2014.json',
-    'valid_info': '/media/rrivera/3BC63CFE33753570/data/coco/annotations/instances_val2014.json',
+    'train_info': '/work/riverasoto1/coco/annotations/instances_train2014.json',
+    'valid_info': '/work/riverasoto1/coco/annotations/instances_val2014.json',
 
     'label_map': COCO_LABEL_MAP
 })
@@ -140,8 +140,8 @@ coco2014_dataset = dataset_base.copy({
 coco2017_dataset = dataset_base.copy({
     'name': 'COCO 2017',
     
-    'train_info': '/media/rrivera/3BC63CFE33753570/data/coco/annotations/instances_train2017.json',
-    'valid_info': '/media/rrivera/3BC63CFE33753570/data/coco/annotations/instances_val2017.json',
+    'train_info': '/work/riverasoto1/coco/annotations/instances_train2017.json',
+    'valid_info': '/work/riverasoto1/coco/annotations/instances_val2017.json',
 
     'label_map': COCO_LABEL_MAP
 })
@@ -320,11 +320,6 @@ mobilenetv2_backbone = backbone_base.copy({
     'type': MobileNetV2Backbone,
     'args': (1.0, mobilenetv2_arch, 8),
     'transform': mobilenetv2_transform,
-
-    # TODO
-    # 'selected_layers' : list(range(2, 8)),
-    # 'pred_scales': [[5, 4]]*6,
-    # 'pred_aspect_ratios': [ [[1], [1, sqrt(2), 1/sqrt(2), sqrt(3), 1/sqrt(3)][:n]] for n in [3, 5, 5, 5, 3, 3] ],
 })
 
 
@@ -401,6 +396,7 @@ activation_func = Config({
     'sigmoid': torch.sigmoid,
     'softmax': lambda x: torch.nn.functional.softmax(x, dim=-1),
     'relu':    lambda x: torch.nn.functional.relu(x, inplace=True),
+    'relu6':   lambda x: torch.nn.functional.relu6(x, inplace=True),
     'none':    lambda x: x,
 })
 
@@ -727,6 +723,12 @@ yolact_base_config = coco_base_config.copy({
     'crowd_iou_threshold': 0.7,
 
     'use_semantic_segmentation_loss': True,
+
+    # YOLACT Embedded
+    
+    # If set to true, will replace all convolutions by MobileNetV1 Convolution Blocks
+    # It's a tradeoff between speed and mAP.
+    'embedded' : False,
 })
 
 yolact_im400_config = yolact_base_config.copy({
@@ -844,6 +846,32 @@ yolact_mobilenetv2_config = yolact_base_config.copy({
         'preapply_sqrt': False,
         'use_square_anchors': True, # This is for backward compatability with a bug
     }),
+})
+
+yolact_mobilenetv2_embedded_config = yolact_base_config.copy({
+    'name': 'yolact_mobilenetv2_embedded',
+
+    'backbone': mobilenetv2_backbone.copy({
+        'selected_layers': [3, 4, 6],
+        
+        'pred_scales': yolact_base_config.backbone.pred_scales,
+        'pred_aspect_ratios': yolact_base_config.backbone.pred_aspect_ratios,
+        'use_pixel_scales': True,
+        'preapply_sqrt': False,
+        'use_square_anchors': True, # This is for backward compatability with a bug
+    }),
+
+    'embedded_fpn': True,
+    'embedded_pred_heads': True,
+    'embedded_proto_net': True,
+})
+
+yolact_resnet50_embedded_config = yolact_resnet50_config.copy({
+    'name': 'yolact_resnet50_embedded',
+
+    'embedded_fpn': True,
+    'embedded_pred_heads': True,
+    'embedded_proto_net': True,
 })
 
 

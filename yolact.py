@@ -2,19 +2,20 @@ import torch, torchvision
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.models.resnet import Bottleneck
-from torch2trt import torch2trt
+# from torch2trt import torch2trt
 import numpy as np
 from copy import deepcopy
 from functools import partial
 from itertools import product
-from math import sqrt
+from math import sqrt, gcd
 from typing import List
 from collections import defaultdict
 
 from data.config import cfg, mask_type
 from layers import Detect
+from layers.embedded import MobileNetV1ConvBlock
 from layers.interpolate import InterpolateModule
-from backbone import construct_backbone
+from backbone import construct_backbone, InvertedResidual # TODO
 
 import torch.backends.cudnn as cudnn
 from utils import timer
@@ -31,10 +32,8 @@ if not use_jit:
 
 # TODO: Incompatible with torch2trt, will have to find a workaround. 
 # ScriptModuleWrapper = torch.jit.ScriptModule if use_jit else nn.Module
-
 ScriptModuleWrapper = nn.Module
 script_method_wrapper = torch.jit.script_method if use_jit else lambda fn, _rcn=None: fn
-
 
 
 class Concat(nn.Module):
@@ -79,6 +78,8 @@ class PredictionModule(nn.Module):
     def __init__(self, in_channels, out_channels=1024, aspect_ratios=[[1]], scales=[1], parent=None, index=0):
         super().__init__()
 
+        conv_block = MobileNetV1ConvBlock if cfg.embedded_pred_heads else nn.Conv2d
+
         self.num_classes = cfg.num_classes
         self.mask_dim    = cfg.mask_dim # Defined by Yolact
         self.num_priors  = sum(len(x)*len(scales) for x in aspect_ratios)
@@ -96,22 +97,26 @@ class PredictionModule(nn.Module):
             if cfg.extra_head_net is None:
                 out_channels = in_channels
             else:
-                self.upfeature, out_channels = make_net(in_channels, cfg.extra_head_net)
+                self.upfeature, out_channels = make_net(in_channels, cfg.extra_head_net, embedded=cfg.embedded_pred_heads)
 
             if cfg.use_prediction_module:
-                self.block = Bottleneck(out_channels, out_channels // 4)
-                self.conv = nn.Conv2d(out_channels, out_channels, kernel_size=1, bias=True)
+                if cfg.embedded_pred_heads:
+                    self.block = InvertedResidual(out_channels, out_channels // 4, stride=1, expand_ratio=6)
+                else:
+                    self.block = Bottleneck(out_channels, out_channels // 4)
+
+                self.conv = conv_block(out_channels, out_channels, kernel_size=1, bias=True)
                 self.bn = nn.BatchNorm2d(out_channels)
 
-            self.bbox_layer = nn.Conv2d(out_channels, self.num_priors * 4,                **cfg.head_layer_params)
-            self.conf_layer = nn.Conv2d(out_channels, self.num_priors * self.num_classes, **cfg.head_layer_params)
-            self.mask_layer = nn.Conv2d(out_channels, self.num_priors * self.mask_dim,    **cfg.head_layer_params)
+            self.bbox_layer = conv_block(out_channels, self.num_priors * 4,                **cfg.head_layer_params)
+            self.conf_layer = conv_block(out_channels, self.num_priors * self.num_classes, **cfg.head_layer_params)
+            self.mask_layer = conv_block(out_channels, self.num_priors * self.mask_dim,    **cfg.head_layer_params)
             
             if cfg.use_mask_scoring:
-                self.score_layer = nn.Conv2d(out_channels, self.num_priors, **cfg.head_layer_params)
+                self.score_layer = conv_block(out_channels, self.num_priors, **cfg.head_layer_params)
 
             if cfg.use_instance_coeff:
-                self.inst_layer = nn.Conv2d(out_channels, self.num_priors * cfg.num_instance_coeffs, **cfg.head_layer_params)
+                self.inst_layer = conv_block(out_channels, self.num_priors * cfg.num_instance_coeffs, **cfg.head_layer_params)
             
             # What is this ugly lambda doing in the middle of all this clean prediction module code?
             def make_extra(num_layers):
@@ -119,15 +124,16 @@ class PredictionModule(nn.Module):
                     return lambda x: x
                 else:
                     # Looks more complicated than it is. This just creates an array of num_layers alternating conv-relu
+                    relu_fn = nn.ReLU6() if cfg.embedded_pred_heads else nn.ReLU()
                     return nn.Sequential(*sum([[
-                        nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
-                        nn.ReLU(inplace=True)
+                        conv_block(out_channels, out_channels, kernel_size=3, padding=1),
+                        relu_fn(inplace=True)
                     ] for _ in range(num_layers)], []))
 
             self.bbox_extra, self.conf_extra, self.mask_extra = [make_extra(x) for x in cfg.extra_layers]
             
             if cfg.mask_type == mask_type.lincomb and cfg.mask_proto_coeff_gate:
-                self.gate_layer = nn.Conv2d(out_channels, self.num_priors * self.mask_dim, kernel_size=3, padding=1)
+                self.gate_layer = conv_block(out_channels, self.num_priors * self.mask_dim, kernel_size=3, padding=1)
 
         self.aspect_ratios = aspect_ratios
         self.scales = scales
@@ -137,53 +143,53 @@ class PredictionModule(nn.Module):
         self.last_img_size = None
 
 
-    def to_tensorrt(self, int8_mode=False):
-        """Converts the bbox, conf, and mask layer of the PredictionModule 
-           into TRTModules.
-        """
+    # def to_tensorrt(self, int8_mode=False):
+        # """Converts the bbox, conf, and mask layer of the PredictionModule 
+           # into TRTModules.
+        # """
 
-        # Each PredictionModule takes a particular input shape. 
-        # Torch2TRT optimizes based on the input shape so we need to 
-        # make sure that we feed it the same shape that it will receive 
-        # during testing phase.
-        input_sizes = [
-                (1, 256, 69, 69),
-                (1, 256, 35, 35),
-                (1, 256, 18, 18),
-                (1, 256, 9, 9),
-                (1, 256, 5, 5),
-                ]
+        # # Each PredictionModule takes a particular input shape. 
+        # # Torch2TRT optimizes based on the input shape so we need to 
+        # # make sure that we feed it the same shape that it will receive 
+        # # during testing phase.
+        # input_sizes = [
+                # (1, 256, 69, 69),
+                # (1, 256, 35, 35),
+                # (1, 256, 18, 18),
+                # (1, 256, 9, 9),
+                # (1, 256, 5, 5),
+                # ]
 
-        x = torch.ones(input_sizes[self.index]).cuda()
+        # x = torch.ones(input_sizes[self.index]).cuda()
 
-        if int8_mode:
-            trt_fn = partial(torch2trt, int8_mode=True, strict_type_constraints=True)
-        else:
-            trt_fn = partial(torch2trt, fp16_mode=True, strict_type_constraints=True)
+        # if int8_mode:
+            # trt_fn = partial(torch2trt, int8_mode=True, strict_type_constraints=True)
+        # else:
+            # trt_fn = partial(torch2trt, fp16_mode=True, strict_type_constraints=True)
 
-        if self.index == 0 and cfg.share_prediction_module:
-            self.bbox_layer_old = self.bbox_layer
-            self.conf_layer_old = self.conf_layer
-            self.mask_layer_old = self.mask_layer
+        # if self.index == 0 and cfg.share_prediction_module:
+            # self.bbox_layer_old = self.bbox_layer
+            # self.conf_layer_old = self.conf_layer
+            # self.mask_layer_old = self.mask_layer
 
-            self.bbox_layer = trt_fn(self.bbox_layer, [x])
-            self.conf_layer = trt_fn(self.conf_layer, [x])
-            self.mask_layer = trt_fn(self.mask_layer, [x])
-        elif self.index > 0 and self.parent is not None and cfg.share_prediction_module:
-            self.upfeature = deepcopy(self.parent[0].upfeature)
+            # self.bbox_layer = trt_fn(self.bbox_layer, [x])
+            # self.conf_layer = trt_fn(self.conf_layer, [x])
+            # self.mask_layer = trt_fn(self.mask_layer, [x])
+        # elif self.index > 0 and self.parent is not None and cfg.share_prediction_module:
+            # self.upfeature = deepcopy(self.parent[0].upfeature)
 
-            self.bbox_extra = self.parent[0].bbox_extra
-            self.conf_extra = self.parent[0].conf_extra
-            self.mask_extra = self.parent[0].mask_extra
+            # self.bbox_extra = self.parent[0].bbox_extra
+            # self.conf_extra = self.parent[0].conf_extra
+            # self.mask_extra = self.parent[0].mask_extra
 
-            self.bbox_layer = trt_fn(self.parent[0].bbox_layer_old, [x])
-            self.conf_layer = trt_fn(self.parent[0].conf_layer_old, [x])
-            self.mask_layer = trt_fn(self.parent[0].mask_layer_old, [x])
+            # self.bbox_layer = trt_fn(self.parent[0].bbox_layer_old, [x])
+            # self.conf_layer = trt_fn(self.parent[0].conf_layer_old, [x])
+            # self.mask_layer = trt_fn(self.parent[0].mask_layer_old, [x])
 
-            self.parent = [None]
-        else:
-            raise NotImplementedError("to_tensorrt doesn't currently work when we're not"
-                                      "sharing the prediction module")
+            # self.parent = [None]
+        # else:
+            # raise NotImplementedError("to_tensorrt doesn't currently work when we're not"
+                                      # "sharing the prediction module")
 
 
     def forward(self, x):
@@ -339,21 +345,23 @@ class FPN(ScriptModuleWrapper):
     def __init__(self, in_channels):
         super().__init__()
 
+        conv_block = MobileNetV1ConvBlock if cfg.embedded_fpn else nn.Conv2d
+
         self.lat_layers  = nn.ModuleList([
-            nn.Conv2d(x, cfg.fpn.num_features, kernel_size=1)
+            conv_block(x, cfg.fpn.num_features, kernel_size=1)
             for x in reversed(in_channels)
         ])
 
         # This is here for backwards compatability
         padding = 1 if cfg.fpn.pad else 0
         self.pred_layers = nn.ModuleList([
-            nn.Conv2d(cfg.fpn.num_features, cfg.fpn.num_features, kernel_size=3, padding=padding)
+            conv_block(cfg.fpn.num_features, cfg.fpn.num_features, kernel_size=3, padding=padding)
             for _ in in_channels
         ])
 
         if cfg.fpn.use_conv_downsample:
             self.downsample_layers = nn.ModuleList([
-                nn.Conv2d(cfg.fpn.num_features, cfg.fpn.num_features, kernel_size=3, padding=1, stride=2)
+                conv_block(cfg.fpn.num_features, cfg.fpn.num_features, kernel_size=3, padding=1, stride=2)
                 for _ in range(cfg.fpn.num_downsample)
             ])
         
@@ -363,34 +371,34 @@ class FPN(ScriptModuleWrapper):
         self.relu_downsample_layers = cfg.fpn.relu_downsample_layers
         self.relu_pred_layers       = cfg.fpn.relu_pred_layers
 
-    def to_tensorrt(self, int8_mode=False):
-        """Converts all the prediction and lat layers to a TRTModule
-        """
-        if int8_mode:
-            trt_fn = partial(torch2trt, int8_mode=True, strict_type_constraints=True)
-        else:
-            trt_fn = partial(torch2trt, fp16_mode=True, strict_type_constraints=True)
+    # def to_tensorrt(self, int8_mode=False):
+        # """Converts all the prediction and lat layers to a TRTModule
+        # """
+        # if int8_mode:
+            # trt_fn = partial(torch2trt, int8_mode=True, strict_type_constraints=True)
+        # else:
+            # trt_fn = partial(torch2trt, fp16_mode=True, strict_type_constraints=True)
 
-        x = torch.ones((1, 256, 18, 18)).cuda()
-        self.pred_layers[0] = trt_fn(self.pred_layers[0], [x])
+        # x = torch.ones((1, 256, 18, 18)).cuda()
+        # self.pred_layers[0] = trt_fn(self.pred_layers[0], [x])
 
-        x = torch.ones((1, 256, 35, 35)).cuda()
-        self.pred_layers[1] = trt_fn(self.pred_layers[1], [x])
+        # x = torch.ones((1, 256, 35, 35)).cuda()
+        # self.pred_layers[1] = trt_fn(self.pred_layers[1], [x])
 
-        x = torch.ones((1, 256, 69, 69)).cuda()
-        self.pred_layers[2] = trt_fn(self.pred_layers[2], [x])
+        # x = torch.ones((1, 256, 69, 69)).cuda()
+        # self.pred_layers[2] = trt_fn(self.pred_layers[2], [x])
 
-        # x = torch.ones((1, 2048, 18, 18)).cuda()
-        x = torch.ones((1, 160, 18, 18)).cuda()
-        self.lat_layers[0] = trt_fn(self.lat_layers[0], [x])
+        # # x = torch.ones((1, 2048, 18, 18)).cuda()
+        # x = torch.ones((1, 160, 18, 18)).cuda()
+        # self.lat_layers[0] = trt_fn(self.lat_layers[0], [x])
 
-        # x = torch.ones((1, 1024, 35, 35)).cuda()
-        x = torch.ones((1, 64, 35, 35)).cuda()
-        self.lat_layers[1] = trt_fn(self.lat_layers[1], [x])
+        # # x = torch.ones((1, 1024, 35, 35)).cuda()
+        # x = torch.ones((1, 64, 35, 35)).cuda()
+        # self.lat_layers[1] = trt_fn(self.lat_layers[1], [x])
 
-        # x = torch.ones((1, 512, 69, 69)).cuda()
-        x = torch.ones((1, 32, 69, 69)).cuda()
-        self.lat_layers[2] = trt_fn(self.lat_layers[2], [x])
+        # # x = torch.ones((1, 512, 69, 69)).cuda()
+        # x = torch.ones((1, 32, 69, 69)).cuda()
+        # self.lat_layers[2] = trt_fn(self.lat_layers[2], [x])
 
     # TODO: This is commented since the FPN is incompatible with TensorRT.
     # @script_method_wrapper
@@ -401,6 +409,7 @@ class FPN(ScriptModuleWrapper):
         Returns:
             - A list of FPN convouts in the same order as x with extra downsample layers if requested.
         """
+        relu_fn = F.relu6 if cfg.embedded_fpn else F.relu
 
         out = []
         x = torch.zeros(1, device=convouts[0].device)
@@ -427,7 +436,7 @@ class FPN(ScriptModuleWrapper):
             out[j] = pred_layer(out[j])
 
             if self.relu_pred_layers:
-                F.relu(out[j], inplace=True)
+                relu_fn(out[j], inplace=True)
 
         cur_idx = len(out)
 
@@ -442,7 +451,7 @@ class FPN(ScriptModuleWrapper):
 
         if self.relu_downsample_layers:
             for idx in range(len(out) - cur_idx):
-                out[idx] = F.relu(out[idx + cur_idx], inplace=False)
+                out[idx] = relu_fn(out[idx + cur_idx], inplace=False)
 
         return out
 
@@ -509,7 +518,9 @@ class Yolact(nn.Module):
             in_channels += self.num_grids
 
             # The include_last_relu=false here is because we might want to change it to another function
-            self.proto_net, cfg.mask_dim = make_net(in_channels, cfg.mask_proto_net, include_last_relu=False)
+            self.proto_net, cfg.mask_dim = make_net(in_channels, cfg.mask_proto_net, 
+                                                    include_last_relu=False,
+                                                    embedded=cfg.embedded_proto_net)
 
             if cfg.mask_proto_bias:
                 cfg.mask_dim += 1
@@ -768,28 +779,28 @@ class Yolact(nn.Module):
             return self.detect(pred_outs, self)
 
 
-    def to_tensorrt_backbone(self, int8_mode=False, calibration_dataset=None):
-        """Converts the Backbone to a TRTModule.
-        """
-        if int8_mode:
-            trt_fn = partial(torch2trt, int8_mode=True, int8_calib_dataset=calibration_dataset, strict_type_constraints=True)
-        else:
-            trt_fn = partial(torch2trt, fp16_mode=True, strict_type_constraints=True)
+    # def to_tensorrt_backbone(self, int8_mode=False, calibration_dataset=None):
+        # """Converts the Backbone to a TRTModule.
+        # """
+        # if int8_mode:
+            # trt_fn = partial(torch2trt, int8_mode=True, int8_calib_dataset=calibration_dataset, strict_type_constraints=True)
+        # else:
+            # trt_fn = partial(torch2trt, fp16_mode=True, strict_type_constraints=True)
 
-        x = torch.ones((1, 3, cfg.max_size, cfg.max_size)).cuda()
-        self.backbone = trt_fn(self.backbone, [x])
+        # x = torch.ones((1, 3, cfg.max_size, cfg.max_size)).cuda()
+        # self.backbone = trt_fn(self.backbone, [x])
 
 
-    def to_tensorrt_protonet(self, int8_mode=False):
-        """Converts ProtoNet to a TRTModule.
-        """
-        if int8_mode:
-            trt_fn = partial(torch2trt, int8_mode=True, strict_type_constraints=True)
-        else:
-            trt_fn = partial(torch2trt, fp16_mode=True, strict_type_constraints=True)
+    # def to_tensorrt_protonet(self, int8_mode=False):
+        # """Converts ProtoNet to a TRTModule.
+        # """
+        # if int8_mode:
+            # trt_fn = partial(torch2trt, int8_mode=True, strict_type_constraints=True)
+        # else:
+            # trt_fn = partial(torch2trt, fp16_mode=True, strict_type_constraints=True)
 
-        x = torch.ones((1, 256, 69, 69)).cuda()
-        self.proto_net = trt_fn(self.proto_net, [x])
+        # x = torch.ones((1, 256, 69, 69)).cuda()
+        # self.proto_net = trt_fn(self.proto_net, [x])
 
 
 # Some testing code

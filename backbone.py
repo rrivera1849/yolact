@@ -469,7 +469,6 @@ class ConvBNReLU(nn.Sequential):
             nn.ReLU6(inplace=True)
         )
 
-
 class InvertedResidual(nn.Module):
     """
     Adapted from torchvision.models.mobilenet.InvertedResidual
@@ -499,7 +498,6 @@ class InvertedResidual(nn.Module):
             return x + self.conv(x)
         else:
             return self.conv(x)
-
 
 class MobileNetV2Backbone(nn.Module):
     """
@@ -589,21 +587,6 @@ class MobileNetV2Backbone(nn.Module):
 
         state_dict = OrderedDict([(transform_dict[k], v) for k,v in self.state_dict().items()])
         self.load_state_dict(state_dict, strict=False)
-
-if __name__ == "__main__":
-    mobilenetv2_arch = [
-        # t, c, n, s
-        [1, 16, 1, 1],
-        [6, 24, 2, 2],
-        [6, 32, 3, 2],
-        [6, 64, 4, 2],
-        [6, 96, 3, 1],
-        [6, 160, 3, 2],
-        [6, 320, 1, 1],
-    ]
-
-    import pdb; pdb.set_trace() 
-    model = MobileNetV2Backbone(inverted_residual_setting=mobilenetv2_arch)
 
 
 def construct_backbone(cfg):

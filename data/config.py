@@ -1,4 +1,4 @@
-from backbone import ResNetBackbone, VGGBackbone, ResNetBackboneGN, DarkNetBackbone, MobileNetV2Backbone
+from backbone import ResNetBackbone, VGGBackbone, ResNetBackboneGN, DarkNetBackbone, MobileNetV2Backbone, MobileNetV3Backbone
 from math import sqrt
 import torch
 
@@ -208,6 +208,13 @@ mobilenetv2_transform = Config({
     'to_float': False,
 })
 
+mobilenetv3_transform = Config({
+    'channel_order': 'RGB',
+    'normalize': True,
+    'subtract_means': False,
+    'to_float': False,
+})
+
 
 
 # ----------------------- BACKBONES ----------------------- #
@@ -322,6 +329,32 @@ mobilenetv2_backbone = backbone_base.copy({
     'transform': mobilenetv2_transform,
 })
 
+mobilenetv3_large_arch = [
+    # k, t, c, SE, HS, s 
+    [3,   1,  16, 0, 0, 1],
+    [3,   4,  24, 0, 0, 2],
+    [3,   3,  24, 0, 0, 1],
+    [5,   3,  40, 1, 0, 2],
+    [5,   3,  40, 1, 0, 1],
+    [5,   3,  40, 1, 0, 1],
+    [3,   6,  80, 0, 1, 2],
+    [3, 2.5,  80, 0, 1, 1],
+    [3, 2.3,  80, 0, 1, 1],
+    [3, 2.3,  80, 0, 1, 1],
+    [3,   6, 112, 1, 1, 1],
+    [3,   6, 112, 1, 1, 1],
+    [5,   6, 160, 1, 1, 2],
+    [5,   6, 160, 1, 1, 1],
+    [5,   6, 160, 1, 1, 1]
+]
+
+mobilenetv3_backbone = backbone_base.copy({
+    'name': 'MobileNetV3',
+    'path': 'mobilenetv3-large-1cd25616.pth',
+    'type': MobileNetV3Backbone,
+    'args': (mobilenetv3_large_arch, 1.0),
+    'transform': mobilenetv3_transform,
+})
 
 # ----------------------- MASK BRANCH TYPES ----------------------- #
 
@@ -853,6 +886,38 @@ yolact_mobilenetv2_embedded_config = yolact_base_config.copy({
 
     'backbone': mobilenetv2_backbone.copy({
         'selected_layers': [3, 4, 6],
+        
+        'pred_scales': yolact_base_config.backbone.pred_scales,
+        'pred_aspect_ratios': yolact_base_config.backbone.pred_aspect_ratios,
+        'use_pixel_scales': True,
+        'preapply_sqrt': False,
+        'use_square_anchors': True, # This is for backward compatability with a bug
+    }),
+
+    'embedded_fpn': True,
+    'embedded_pred_heads': True,
+    'embedded_proto_net': True,
+})
+
+yolact_mobilenetv3_config = yolact_base_config.copy({
+    'name': 'yolact_mobilenetv3',
+
+    'backbone': mobilenetv3_backbone.copy({
+        'selected_layers': [6, 12, 16],
+        
+        'pred_scales': yolact_base_config.backbone.pred_scales,
+        'pred_aspect_ratios': yolact_base_config.backbone.pred_aspect_ratios,
+        'use_pixel_scales': True,
+        'preapply_sqrt': False,
+        'use_square_anchors': True, # This is for backward compatability with a bug
+    }),
+})
+
+yolact_mobilenetv3_embedded_config = yolact_base_config.copy({
+    'name': 'yolact_mobilenetv3_embedded',
+
+    'backbone': mobilenetv3_backbone.copy({
+        'selected_layers': [6, 12, 16],
         
         'pred_scales': yolact_base_config.backbone.pred_scales,
         'pred_aspect_ratios': yolact_base_config.backbone.pred_aspect_ratios,

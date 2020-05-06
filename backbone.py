@@ -719,6 +719,7 @@ class MobileNetV3Backbone(nn.Module):
             self.channels.append(input_channel)
 
         self.layers.append(Conv1x1BNSwish(input_channel, expansion_size))
+        self.channels.append(expansion_size)
 
         # These modules will be initialized by init_backbone,
         # so don't overwrite their initialization later.
@@ -764,85 +765,6 @@ class MobileNetV3Backbone(nn.Module):
 
         state_dict = OrderedDict([(transform_dict[k], v) for k,v in self.state_dict().items()])
         self.load_state_dict(state_dict, strict=False)
-
-
-
-if __name__ == "__main__":
-    cfgs = [
-        # k, t, c, SE, HS, s 
-        [3,   1,  16, 0, 0, 1],
-        [3,   4,  24, 0, 0, 2],
-        [3,   3,  24, 0, 0, 1],
-        [5,   3,  40, 1, 0, 2],
-        [5,   3,  40, 1, 0, 1],
-        [5,   3,  40, 1, 0, 1],
-        [3,   6,  80, 0, 1, 2],
-        [3, 2.5,  80, 0, 1, 1],
-        [3, 2.3,  80, 0, 1, 1],
-        [3, 2.3,  80, 0, 1, 1],
-        [3,   6, 112, 1, 1, 1],
-        [3,   6, 112, 1, 1, 1],
-        [5,   6, 160, 1, 1, 2],
-        [5,   6, 160, 1, 1, 1],
-        [5,   6, 160, 1, 1, 1]
-    ]
-
-    checkpoint_path = "./mobilenetv3-large-1cd25616.pth"
-    model = MobileNetV3Backbone(cfgs)
-    model.init_backbone(checkpoint_path)
-
-    import numpy as np
-    model_parameters = filter(lambda p: p.requires_grad, model.parameters())
-    params = sum([np.prod(p.size()) for p in model_parameters])
-    print("# Trainable Params: {}".format(params))
-
-    x = torch.randn(1, 3, 224, 224)
-    outs = model(x)
-    import pdb; pdb.set_trace() 
-
-# def mobilenetv3_large(**kwargs):
-    # """
-    # Constructs a MobileNetV3-Large model
-    # """
-    # cfgs = [
-        # # k, t, c, SE, HS, s 
-        # [3,   1,  16, 0, 0, 1],
-        # [3,   4,  24, 0, 0, 2],
-        # [3,   3,  24, 0, 0, 1],
-        # [5,   3,  40, 1, 0, 2],
-        # [5,   3,  40, 1, 0, 1],
-        # [5,   3,  40, 1, 0, 1],
-        # [3,   6,  80, 0, 1, 2],
-        # [3, 2.5,  80, 0, 1, 1],
-        # [3, 2.3,  80, 0, 1, 1],
-        # [3, 2.3,  80, 0, 1, 1],
-        # [3,   6, 112, 1, 1, 1],
-        # [3,   6, 112, 1, 1, 1],
-        # [5,   6, 160, 1, 1, 2],
-        # [5,   6, 160, 1, 1, 1],
-        # [5,   6, 160, 1, 1, 1]
-    # ]
-    # return MobileNetV3(cfgs, mode='large', **kwargs)
-
-
-# def mobilenetv3_small(**kwargs):
-    # """
-    # Constructs a MobileNetV3-Small model
-    # """
-    # cfgs = [
-        # # k, t, c, SE, HS, s 
-        # [3,    1,  16, 1, 0, 2],
-        # [3,  4.5,  24, 0, 0, 2],
-        # [3, 3.67,  24, 0, 0, 1],
-        # [5,    4,  40, 1, 1, 2],
-        # [5,    6,  40, 1, 1, 1],
-        # [5,    6,  40, 1, 1, 1],
-        # [5,    3,  48, 1, 1, 1],
-        # [5,    3,  48, 1, 1, 1],
-        # [5,    6,  96, 1, 1, 2],
-        # [5,    6,  96, 1, 1, 1],
-        # [5,    6,  96, 1, 1, 1],
-    # ]
 
 
 def construct_backbone(cfg):

@@ -3,6 +3,7 @@ import torch.nn as nn
 import pickle
 
 from collections import OrderedDict
+from functools import partial
 
 try:
     from dcn_v2 import DCN
@@ -444,6 +445,10 @@ class VGGBackbone(nn.Module):
         self.layers.append(layer)
         
 
+##################################################
+# YOLACT Embedded Backbones
+##################################################
+
 def _make_divisible(v, divisor, min_value=None):
     """
     Adapted from torchvision.models.mobilenet._make_divisible.
@@ -457,17 +462,120 @@ def _make_divisible(v, divisor, min_value=None):
     return new_v
 
 
-class ConvBNReLU(nn.Sequential):
+class h_sigmoid(nn.Module):
+    """
+    Adapted from https://github.com/d-li14/mobilenetv3.pytorch/blob/master/mobilenetv3.py
+    """
+    def __init__(self, inplace=True):
+        super(h_sigmoid, self).__init__()
+        self.relu = nn.ReLU6(inplace=inplace)
+
+    def forward(self, x):
+        return self.relu(x + 3) / 6
+
+
+class h_swish(nn.Module):
+    """
+    Adapted from https://github.com/d-li14/mobilenetv3.pytorch/blob/master/mobilenetv3.py
+    """
+    def __init__(self, inplace=True):
+        super(h_swish, self).__init__()
+        self.h_sigmoid = h_sigmoid(inplace=inplace)
+
+    def forward(self, x):
+        return x * self.h_sigmoid(x)
+
+
+class SqueezeExcite(nn.Module):
+    """
+    Adapted from https://github.com/d-li14/mobilenetv3.pytorch/blob/master/mobilenetv3.py
+    """
+    def __init__(self, channel, reduction=4):
+        super(SqueezeExcite, self).__init__()
+
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+
+        intermediate = _make_divisible(channel // reduction, divisor=8)
+        self.fc = nn.Sequential(
+                nn.Linear(channel, intermediate),
+                nn.ReLU(inplace=True),
+                nn.Linear(intermediate, channel))
+
+
+    def forward(self, x):
+        B, C, _, _ = x.size()
+        weights = self.avg_pool(x).view(B, C)
+        weights = self.fc(weights).view(B, C, 1, 1)
+
+        return x * y
+
+
+class ConvBNAct(nn.Sequential):
     """
     Adapted from torchvision.models.mobilenet.ConvBNReLU
     """
-    def __init__(self, in_planes, out_planes, kernel_size=3, stride=1, groups=1):
+    def __init__(self, in_planes, out_planes, kernel_size=3, stride=1, groups=1, activation=nn.ReLU6(inplace=True)):
         padding = (kernel_size - 1) // 2
-        super(ConvBNReLU, self).__init__(
+        super(ConvBNAct, self).__init__(
             nn.Conv2d(in_planes, out_planes, kernel_size, stride, padding, groups=groups, bias=False),
             nn.BatchNorm2d(out_planes),
-            nn.ReLU6(inplace=True)
+            activation
         )
+
+
+ConvBN = partial(ConvBNAct, activation=nn.Identity())
+ConvBNReLU = partial(ConvBNAct)
+Conv3x3BNSwish = partial(ConvBNAct, kernel_size=3, activation=h_swish(inplace=True))
+Conv1x1BNSwish = partial(ConvBNAct, kernel_size=1, stride=1, activation=h_swish(inplace=True))
+
+
+class InvertedResidualv3(nn.Module):
+    """
+    Adapted from https://github.com/d-li14/mobilenetv3.pytorch/blob/master/mobilenetv3.py
+
+    Inverted Residual as described in https://arxiv.org/pdf/1905.02244.pdf
+    """
+    def __init__(self, inp, oup, stride, kernel_size, expand_ratio, SE=False, HS=False):
+        super(InvertedResidualv3, self).__init__()
+        self.stride = stride
+        assert stride in [1, 2]
+
+        hidden_dim = int(round(inp * expand_ratio))
+        self.use_res_connect = self.stride == 1 and inp == oup
+
+        if expand_ratio == 1:
+            self.conv = nn.Sequential(
+                # dw
+                ConvBN(hidden_dim, hidden_dim, kernel_size, stride, groups=hidden_dim),
+                h_swish() if HS else nn.ReLU(inplace=True),
+                SELayer(hidden_dim) if SE else nn.Identity(),
+
+                # pw-linear
+                nn.Conv2d(hidden_dim, oup, 1, 1, 0, bias=False),
+                nn.BatchNorm2d(oup),
+            )
+        else:
+            self.conv = nn.Sequential(
+                # pw
+                ConvBN(inp, hidden_dim, 1, 1, 0),
+                h_swish() if HS else nn.ReLU(inplace=True),
+
+                # dw
+                ConvBN(hidden_dim, hidden_dim, kernel_size, stride, groups=hidden_dim),
+                SELayer(hidden_dim) if SE else nn.Identity(),
+                h_swish() if HS else nn.ReLU(inplace=True),
+
+                # pw-linear
+                nn.Conv2d(hidden_dim, oup, 1, 1, 0, bias=False),
+                nn.BatchNorm2d(oup),
+            )
+
+    def forward(self, x):
+        if self.use_res_connect:
+            return x + self.conv(x)
+        else:
+            return self.conv(x)
+
 
 class InvertedResidual(nn.Module):
     """
@@ -485,12 +593,15 @@ class InvertedResidual(nn.Module):
         if expand_ratio != 1:
             # pw
             layers.append(ConvBNReLU(inp, hidden_dim, kernel_size=1))
+
         layers.extend([
             # dw
             ConvBNReLU(hidden_dim, hidden_dim, stride=stride, groups=hidden_dim),
             # pw-linear
-            nn.Conv2d(hidden_dim, oup, 1, 1, 0, bias=False), nn.BatchNorm2d(oup),
+            nn.Conv2d(hidden_dim, oup, 1, 1, 0, bias=False), 
+            nn.BatchNorm2d(oup),
         ])
+
         self.conv = nn.Sequential(*layers)
 
     def forward(self, x):
@@ -498,6 +609,7 @@ class InvertedResidual(nn.Module):
             return x + self.conv(x)
         else:
             return self.conv(x)
+
 
 class MobileNetV2Backbone(nn.Module):
     """
@@ -589,6 +701,9 @@ class MobileNetV2Backbone(nn.Module):
         self.load_state_dict(state_dict, strict=False)
 
 
+# class MobileNetV3Backbone(nn.Module):
+
+
 def construct_backbone(cfg):
     """ Constructs a backbone given a backbone config object (see config.py). """
     backbone = cfg.type(*cfg.args)
@@ -600,3 +715,4 @@ def construct_backbone(cfg):
         backbone.add_layer()
 
     return backbone
+

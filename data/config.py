@@ -109,11 +109,11 @@ dataset_base = Config({
     'name': 'Base Dataset',
 
     # Training images and annotations
-    'train_images': '/work/riverasoto1/coco/images/',
+    'train_images': '/disk1/chong-data/coco/images/',
     'train_info':   'path_to_annotation_file',
 
     # Validation images and annotations.
-    'valid_images': '/work/riverasoto1/coco/images/',
+    'valid_images': '/disk1/chong-data/coco/images/',
     'valid_info':   'path_to_annotation_file',
 
     # Whether or not to load GT. If this is False, eval.py quantitative evaluation won't work.
@@ -131,8 +131,8 @@ dataset_base = Config({
 coco2014_dataset = dataset_base.copy({
     'name': 'COCO 2014',
     
-    'train_info': '/work/riverasoto1/coco/annotations/instances_train2014.json',
-    'valid_info': '/work/riverasoto1/coco/annotations/instances_val2014.json',
+    'train_info': '/disk1/chong-data/coco/annotations/instances_train2014.json',
+    'valid_info': '/disk1/chong-data/coco/annotations/instances_val2014.json',
 
     'label_map': COCO_LABEL_MAP
 })
@@ -140,8 +140,8 @@ coco2014_dataset = dataset_base.copy({
 coco2017_dataset = dataset_base.copy({
     'name': 'COCO 2017',
     
-    'train_info': '/work/riverasoto1/coco/annotations/instances_train2017.json',
-    'valid_info': '/work/riverasoto1/coco/annotations/instances_val2017.json',
+    'train_info': '/disk1/chong-data/coco/annotations/instances_train2017.json',
+    'valid_info': '/disk1/chong-data/coco/annotations/instances_val2017.json',
 
     'label_map': COCO_LABEL_MAP
 })
@@ -725,10 +725,10 @@ yolact_base_config = coco_base_config.copy({
     'use_semantic_segmentation_loss': True,
 
     # YOLACT Embedded
-    
-    # If set to true, will replace all convolutions by MobileNetV1 Convolution Blocks
-    # It's a tradeoff between speed and mAP.
-    'embedded' : False,
+
+    'embedded_fpn': False,
+    'embedded_pred_heads': False,
+    'embedded_proto_net': False,
 })
 
 yolact_im400_config = yolact_base_config.copy({

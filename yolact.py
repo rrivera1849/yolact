@@ -31,8 +31,8 @@ if not use_jit:
     print('Multiple GPUs detected! Turning off JIT.')
 
 # TODO: Incompatible with torch2trt, will have to find a workaround. 
-# ScriptModuleWrapper = torch.jit.ScriptModule if use_jit else nn.Module
-ScriptModuleWrapper = nn.Module
+ScriptModuleWrapper = torch.jit.ScriptModule if use_jit else nn.Module
+# ScriptModuleWrapper = nn.Module
 script_method_wrapper = torch.jit.script_method if use_jit else lambda fn, _rcn=None: fn
 
 
@@ -346,6 +346,7 @@ class FPN(ScriptModuleWrapper):
         super().__init__()
 
         conv_block = MobileNetV1ConvBlock if cfg.embedded_fpn else nn.Conv2d
+        self.relu_fn = F.relu6 if cfg.embedded_fpn else F.relu
 
         self.lat_layers  = nn.ModuleList([
             conv_block(x, cfg.fpn.num_features, kernel_size=1)
@@ -401,7 +402,7 @@ class FPN(ScriptModuleWrapper):
         # self.lat_layers[2] = trt_fn(self.lat_layers[2], [x])
 
     # TODO: This is commented since the FPN is incompatible with TensorRT.
-    # @script_method_wrapper
+    @script_method_wrapper
     def forward(self, convouts:List[torch.Tensor]):
         """
         Args:
@@ -409,7 +410,6 @@ class FPN(ScriptModuleWrapper):
         Returns:
             - A list of FPN convouts in the same order as x with extra downsample layers if requested.
         """
-        relu_fn = F.relu6 if cfg.embedded_fpn else F.relu
 
         out = []
         x = torch.zeros(1, device=convouts[0].device)
@@ -436,7 +436,7 @@ class FPN(ScriptModuleWrapper):
             out[j] = pred_layer(out[j])
 
             if self.relu_pred_layers:
-                relu_fn(out[j], inplace=True)
+                self.relu_fn(out[j], inplace=True)
 
         cur_idx = len(out)
 
@@ -451,7 +451,7 @@ class FPN(ScriptModuleWrapper):
 
         if self.relu_downsample_layers:
             for idx in range(len(out) - cur_idx):
-                out[idx] = relu_fn(out[idx + cur_idx], inplace=False)
+                out[idx] = self.relu_fn(out[idx + cur_idx], inplace=False)
 
         return out
 

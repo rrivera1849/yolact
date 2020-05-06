@@ -507,7 +507,7 @@ class SqueezeExcite(nn.Module):
         weights = self.avg_pool(x).view(B, C)
         weights = self.fc(weights).view(B, C, 1, 1)
 
-        return x * y
+        return x * weights
 
 
 class ConvBNAct(nn.Sequential):
@@ -529,26 +529,25 @@ Conv3x3BNSwish = partial(ConvBNAct, kernel_size=3, activation=h_swish(inplace=Tr
 Conv1x1BNSwish = partial(ConvBNAct, kernel_size=1, stride=1, activation=h_swish(inplace=True))
 
 
-class InvertedResidualv3(nn.Module):
+class InvertedResidualV3(nn.Module):
     """
     Adapted from https://github.com/d-li14/mobilenetv3.pytorch/blob/master/mobilenetv3.py
 
     Inverted Residual as described in https://arxiv.org/pdf/1905.02244.pdf
     """
-    def __init__(self, inp, oup, stride, kernel_size, expand_ratio, SE=False, HS=False):
-        super(InvertedResidualv3, self).__init__()
+    def __init__(self, inp, hidden_dim, oup, stride, kernel_size, SE=False, HS=False):
+        super(InvertedResidualV3, self).__init__()
         self.stride = stride
         assert stride in [1, 2]
 
-        hidden_dim = int(round(inp * expand_ratio))
         self.use_res_connect = self.stride == 1 and inp == oup
 
-        if expand_ratio == 1:
+        if inp == hidden_dim:
             self.conv = nn.Sequential(
                 # dw
                 ConvBN(hidden_dim, hidden_dim, kernel_size, stride, groups=hidden_dim),
                 h_swish() if HS else nn.ReLU(inplace=True),
-                SELayer(hidden_dim) if SE else nn.Identity(),
+                SqueezeExcite(hidden_dim) if SE else nn.Identity(),
 
                 # pw-linear
                 nn.Conv2d(hidden_dim, oup, 1, 1, 0, bias=False),
@@ -557,12 +556,12 @@ class InvertedResidualv3(nn.Module):
         else:
             self.conv = nn.Sequential(
                 # pw
-                ConvBN(inp, hidden_dim, 1, 1, 0),
+                ConvBN(inp, hidden_dim, 1, 1),
                 h_swish() if HS else nn.ReLU(inplace=True),
 
                 # dw
                 ConvBN(hidden_dim, hidden_dim, kernel_size, stride, groups=hidden_dim),
-                SELayer(hidden_dim) if SE else nn.Identity(),
+                SqueezeExcite(hidden_dim) if SE else nn.Identity(),
                 h_swish() if HS else nn.ReLU(inplace=True),
 
                 # pw-linear
@@ -701,7 +700,149 @@ class MobileNetV2Backbone(nn.Module):
         self.load_state_dict(state_dict, strict=False)
 
 
-# class MobileNetV3Backbone(nn.Module):
+class MobileNetV3Backbone(nn.Module):
+    def __init__(self, cfg, width_mult=1.0, block=InvertedResidualV3):
+        super(MobileNetV3Backbone, self).__init__()
+        assert len(cfg) >= 0 and len(cfg[0]) == 6
+
+        self.layers = nn.ModuleList()
+        self.channels = []
+
+        # building first layer
+        input_channel = _make_divisible(16 * width_mult, 8)
+        self.layers.append(Conv3x3BNSwish(3, input_channel, stride=2))
+        self.channels.append(input_channel)
+
+        # building inverted residual blocks
+        for k, t, c, se, hs, s in cfg:
+            input_channel, expansion_size = self._make_layer(input_channel, width_mult, 8, k, t, c, se, hs, s, block)
+            self.channels.append(input_channel)
+
+        self.layers.append(Conv1x1BNSwish(input_channel, expansion_size))
+
+        # These modules will be initialized by init_backbone,
+        # so don't overwrite their initialization later.
+        self.backbone_modules = [m for m in self.modules() if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear)]
+
+
+    def forward(self, x):
+        """ Returns a list of convouts for each layer. """
+        # This exists since TorchScript doesn't support inheritance, so the superclass method
+        # (this one) needs to have a name other than `forward` that can be accessed in a subclass
+        outs = []
+
+        for idx, layer in enumerate(self.layers):
+            x = layer(x)
+            
+            outs.append(x)
+        
+        return tuple(outs)
+
+
+    def _make_layer(self, input_channel, width_mult, round_nearest, k, t, c, se, hs, s, block):
+        """A layer is a combination of inverted residual blocks"""
+        output_channel = _make_divisible(c * width_mult, round_nearest)
+        expansion_size = _make_divisible(input_channel * t, round_nearest)
+
+        self.layers.append(block(input_channel, expansion_size, output_channel, s, k, se, hs))
+        return output_channel, expansion_size
+
+
+    def add_layer(self, conv_channels=960, k=5, t=6, c=1280, se=1, hs=1, s=2):
+        """TODO: Need to make sure that this works as intended.
+        """
+        self._make_layer(conv_channels, 1.0, 8, k, t, c, se, hs, s, InvertedResidualV3)
+
+
+    def init_backbone(self, path):
+        """ Initializes the backbone weights for training. """
+        checkpoint = torch.load(path)
+
+        # The last four elements are the classifier so chop it off.
+        checkpoint_keys = list(checkpoint.keys())[:-4]
+        transform_dict = dict(zip(list(self.state_dict().keys()), checkpoint_keys))
+
+        state_dict = OrderedDict([(transform_dict[k], v) for k,v in self.state_dict().items()])
+        self.load_state_dict(state_dict, strict=False)
+
+
+
+if __name__ == "__main__":
+    cfgs = [
+        # k, t, c, SE, HS, s 
+        [3,   1,  16, 0, 0, 1],
+        [3,   4,  24, 0, 0, 2],
+        [3,   3,  24, 0, 0, 1],
+        [5,   3,  40, 1, 0, 2],
+        [5,   3,  40, 1, 0, 1],
+        [5,   3,  40, 1, 0, 1],
+        [3,   6,  80, 0, 1, 2],
+        [3, 2.5,  80, 0, 1, 1],
+        [3, 2.3,  80, 0, 1, 1],
+        [3, 2.3,  80, 0, 1, 1],
+        [3,   6, 112, 1, 1, 1],
+        [3,   6, 112, 1, 1, 1],
+        [5,   6, 160, 1, 1, 2],
+        [5,   6, 160, 1, 1, 1],
+        [5,   6, 160, 1, 1, 1]
+    ]
+
+    checkpoint_path = "./mobilenetv3-large-1cd25616.pth"
+    model = MobileNetV3Backbone(cfgs)
+    model.init_backbone(checkpoint_path)
+
+    import numpy as np
+    model_parameters = filter(lambda p: p.requires_grad, model.parameters())
+    params = sum([np.prod(p.size()) for p in model_parameters])
+    print("# Trainable Params: {}".format(params))
+
+    x = torch.randn(1, 3, 224, 224)
+    outs = model(x)
+    import pdb; pdb.set_trace() 
+
+# def mobilenetv3_large(**kwargs):
+    # """
+    # Constructs a MobileNetV3-Large model
+    # """
+    # cfgs = [
+        # # k, t, c, SE, HS, s 
+        # [3,   1,  16, 0, 0, 1],
+        # [3,   4,  24, 0, 0, 2],
+        # [3,   3,  24, 0, 0, 1],
+        # [5,   3,  40, 1, 0, 2],
+        # [5,   3,  40, 1, 0, 1],
+        # [5,   3,  40, 1, 0, 1],
+        # [3,   6,  80, 0, 1, 2],
+        # [3, 2.5,  80, 0, 1, 1],
+        # [3, 2.3,  80, 0, 1, 1],
+        # [3, 2.3,  80, 0, 1, 1],
+        # [3,   6, 112, 1, 1, 1],
+        # [3,   6, 112, 1, 1, 1],
+        # [5,   6, 160, 1, 1, 2],
+        # [5,   6, 160, 1, 1, 1],
+        # [5,   6, 160, 1, 1, 1]
+    # ]
+    # return MobileNetV3(cfgs, mode='large', **kwargs)
+
+
+# def mobilenetv3_small(**kwargs):
+    # """
+    # Constructs a MobileNetV3-Small model
+    # """
+    # cfgs = [
+        # # k, t, c, SE, HS, s 
+        # [3,    1,  16, 1, 0, 2],
+        # [3,  4.5,  24, 0, 0, 2],
+        # [3, 3.67,  24, 0, 0, 1],
+        # [5,    4,  40, 1, 1, 2],
+        # [5,    6,  40, 1, 1, 1],
+        # [5,    6,  40, 1, 1, 1],
+        # [5,    3,  48, 1, 1, 1],
+        # [5,    3,  48, 1, 1, 1],
+        # [5,    6,  96, 1, 1, 2],
+        # [5,    6,  96, 1, 1, 1],
+        # [5,    6,  96, 1, 1, 1],
+    # ]
 
 
 def construct_backbone(cfg):

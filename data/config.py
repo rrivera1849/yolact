@@ -1,4 +1,4 @@
-from backbone import ResNetBackbone, VGGBackbone, ResNetBackboneGN, DarkNetBackbone, MobileNetV2Backbone, MobileNetV3Backbone
+from backbone import BasicBlock, ResNetBackbone, VGGBackbone, ResNetBackboneGN, DarkNetBackbone, MobileNetV2Backbone, MobileNetV3Backbone
 from math import sqrt
 import torch
 
@@ -275,6 +275,22 @@ resnet50_backbone = resnet101_backbone.copy({
 resnet50_dcnv2_backbone = resnet50_backbone.copy({
     'name': 'ResNet50_DCNv2',
     'args': ([3, 4, 6, 3], [0, 4, 6, 3]),
+})
+
+resnet34_backbone = resnet101_backbone.copy({
+    'name': 'ResNet34',
+    'path': 'resnet34-333f7ec4.pth',
+    'type': ResNetBackbone,
+    'args': ([3, 4, 6, 3], [0, 0, 0, 0], 1, [], BasicBlock),
+    'transform': resnet_transform,
+})
+
+resnet18_backbone = resnet101_backbone.copy({
+    'name': 'ResNet18',
+    'path': 'resnet18-5c106cde.pth',
+    'type': ResNetBackbone,
+    'args': ([2, 2, 2, 2], [0, 0, 0, 0], 1, [], BasicBlock),
+    'transform': resnet_transform,
 })
 
 darknet53_backbone = backbone_base.copy({
@@ -825,6 +841,34 @@ yolact_resnet50_pascal_config = yolact_resnet50_config.copy({
         'pred_scales': [[32], [64], [128], [256], [512]],
         'use_square_anchors': False,
     })
+})
+
+yolact_resnet34_config = yolact_base_config.copy({
+    'name': 'yolact_resnet34',
+
+    'backbone': resnet34_backbone.copy({
+        'selected_layers': list(range(1, 4)),
+        
+        'pred_scales': yolact_base_config.backbone.pred_scales,
+        'pred_aspect_ratios': yolact_base_config.backbone.pred_aspect_ratios,
+        'use_pixel_scales': True,
+        'preapply_sqrt': False,
+        'use_square_anchors': True, # This is for backward compatability with a bug
+    }),
+})
+
+yolact_resnet18_config = yolact_base_config.copy({
+    'name': 'yolact_resnet18',
+
+    'backbone': resnet18_backbone.copy({
+        'selected_layers': list(range(1, 4)),
+        
+        'pred_scales': yolact_base_config.backbone.pred_scales,
+        'pred_aspect_ratios': yolact_base_config.backbone.pred_aspect_ratios,
+        'use_pixel_scales': True,
+        'preapply_sqrt': False,
+        'use_square_anchors': True, # This is for backward compatability with a bug
+    }),
 })
 
 # ----------------------- YOLACT++ CONFIGS ----------------------- #

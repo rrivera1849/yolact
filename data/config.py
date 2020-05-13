@@ -215,7 +215,7 @@ mobilenetv3_transform = Config({
     'to_float': False,
 })
 
-efficientnet_b5_transform = Config({
+efficientnet_b3_transform = Config({
     'channel_order': 'RGB',
     'normalize': True,
     'subtract_means': False,
@@ -377,13 +377,13 @@ mobilenetv3_backbone = backbone_base.copy({
     'transform': mobilenetv3_transform,
 })
 
-block_args, global_args = get_model_params("efficientnet-b5")
-efficientnet_b5_backbone = backbone_base.copy({
-    'name': 'EfficientNetB5',
-    'path': 'efficientnet-b5-b6417697.pth',
+block_args, global_args = get_model_params("efficientnet-b3")
+efficientnet_b3_backbone = backbone_base.copy({
+    'name': 'EfficientNetB3',
+    'path': 'efficientnet-b3-5fb5a3c3.pth',
     'type': EfficientNetBackbone,
     'args': (block_args, global_args),
-    'transform': efficientnet_b5_transform,
+    'transform': efficientnet_b3_transform,
 })
 
 # ----------------------- MASK BRANCH TYPES ----------------------- #
@@ -997,10 +997,10 @@ yolact_resnet50_embedded_config = yolact_resnet50_config.copy({
     'embedded_proto_net': True,
 })
 
-yolact_efficientnetb5_config = yolact_base_config.copy({
-    'name': 'yolact_efficientnetb5',
+yolact_efficientnetb3_config = yolact_base_config.copy({
+    'name': 'yolact_efficientnetb3',
 
-    'backbone': efficientnet_b5_backbone.copy({
+    'backbone': efficientnet_b3_backbone.copy({
         'selected_layers': [3, 4, 6],
         
         'pred_scales': yolact_base_config.backbone.pred_scales,

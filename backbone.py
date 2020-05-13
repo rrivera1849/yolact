@@ -5,6 +5,8 @@ import pickle
 from collections import OrderedDict
 from functools import partial
 
+from layers.embedded import *
+
 try:
     from dcn_v2 import DCN
 except ImportError:
@@ -506,167 +508,6 @@ class VGGBackbone(nn.Module):
 # YOLACT Embedded Backbones
 ##################################################
 
-def _make_divisible(v, divisor, min_value=None):
-    """
-    Adapted from torchvision.models.mobilenet._make_divisible.
-    """
-    if min_value is None:
-        min_value = divisor
-    new_v = max(min_value, int(v + divisor / 2) // divisor * divisor)
-    # Make sure that round down does not go down by more than 10%.
-    if new_v < 0.9 * v:
-        new_v += divisor
-    return new_v
-
-
-class h_sigmoid(nn.Module):
-    """
-    Adapted from https://github.com/d-li14/mobilenetv3.pytorch/blob/master/mobilenetv3.py
-    """
-    def __init__(self, inplace=True):
-        super(h_sigmoid, self).__init__()
-        self.relu = nn.ReLU6(inplace=inplace)
-
-    def forward(self, x):
-        return self.relu(x + 3) / 6
-
-
-class h_swish(nn.Module):
-    """
-    Adapted from https://github.com/d-li14/mobilenetv3.pytorch/blob/master/mobilenetv3.py
-    """
-    def __init__(self, inplace=True):
-        super(h_swish, self).__init__()
-        self.h_sigmoid = h_sigmoid(inplace=inplace)
-
-    def forward(self, x):
-        return x * self.h_sigmoid(x)
-
-
-class SqueezeExcite(nn.Module):
-    """
-    Adapted from https://github.com/d-li14/mobilenetv3.pytorch/blob/master/mobilenetv3.py
-    """
-    def __init__(self, channel, reduction=4):
-        super(SqueezeExcite, self).__init__()
-
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-
-        intermediate = _make_divisible(channel // reduction, divisor=8)
-        self.fc = nn.Sequential(
-                nn.Linear(channel, intermediate),
-                nn.ReLU(inplace=True),
-                nn.Linear(intermediate, channel))
-
-
-    def forward(self, x):
-        B, C, _, _ = x.size()
-        weights = self.avg_pool(x).view(B, C)
-        weights = self.fc(weights).view(B, C, 1, 1)
-
-        return x * weights
-
-
-class ConvBNAct(nn.Sequential):
-    """
-    Adapted from torchvision.models.mobilenet.ConvBNReLU
-    """
-    def __init__(self, in_planes, out_planes, kernel_size=3, stride=1, groups=1, activation=nn.ReLU6(inplace=True)):
-        padding = (kernel_size - 1) // 2
-        super(ConvBNAct, self).__init__(
-            nn.Conv2d(in_planes, out_planes, kernel_size, stride, padding, groups=groups, bias=False),
-            nn.BatchNorm2d(out_planes),
-            activation
-        )
-
-
-ConvBN = partial(ConvBNAct, activation=nn.Identity())
-ConvBNReLU = partial(ConvBNAct)
-Conv3x3BNSwish = partial(ConvBNAct, kernel_size=3, activation=h_swish(inplace=True))
-Conv1x1BNSwish = partial(ConvBNAct, kernel_size=1, stride=1, activation=h_swish(inplace=True))
-
-
-class InvertedResidualV3(nn.Module):
-    """
-    Adapted from https://github.com/d-li14/mobilenetv3.pytorch/blob/master/mobilenetv3.py
-
-    Inverted Residual as described in https://arxiv.org/pdf/1905.02244.pdf
-    """
-    def __init__(self, inp, hidden_dim, oup, stride, kernel_size, SE=False, HS=False):
-        super(InvertedResidualV3, self).__init__()
-        self.stride = stride
-        assert stride in [1, 2]
-
-        self.use_res_connect = self.stride == 1 and inp == oup
-
-        if inp == hidden_dim:
-            self.conv = nn.Sequential(
-                # dw
-                ConvBN(hidden_dim, hidden_dim, kernel_size, stride, groups=hidden_dim),
-                h_swish() if HS else nn.ReLU(inplace=True),
-                SqueezeExcite(hidden_dim) if SE else nn.Identity(),
-
-                # pw-linear
-                nn.Conv2d(hidden_dim, oup, 1, 1, 0, bias=False),
-                nn.BatchNorm2d(oup),
-            )
-        else:
-            self.conv = nn.Sequential(
-                # pw
-                ConvBN(inp, hidden_dim, 1, 1),
-                h_swish() if HS else nn.ReLU(inplace=True),
-
-                # dw
-                ConvBN(hidden_dim, hidden_dim, kernel_size, stride, groups=hidden_dim),
-                SqueezeExcite(hidden_dim) if SE else nn.Identity(),
-                h_swish() if HS else nn.ReLU(inplace=True),
-
-                # pw-linear
-                nn.Conv2d(hidden_dim, oup, 1, 1, 0, bias=False),
-                nn.BatchNorm2d(oup),
-            )
-
-    def forward(self, x):
-        if self.use_res_connect:
-            return x + self.conv(x)
-        else:
-            return self.conv(x)
-
-
-class InvertedResidual(nn.Module):
-    """
-    Adapted from torchvision.models.mobilenet.InvertedResidual
-    """
-    def __init__(self, inp, oup, stride, expand_ratio):
-        super(InvertedResidual, self).__init__()
-        self.stride = stride
-        assert stride in [1, 2]
-
-        hidden_dim = int(round(inp * expand_ratio))
-        self.use_res_connect = self.stride == 1 and inp == oup
-
-        layers = []
-        if expand_ratio != 1:
-            # pw
-            layers.append(ConvBNReLU(inp, hidden_dim, kernel_size=1))
-
-        layers.extend([
-            # dw
-            ConvBNReLU(hidden_dim, hidden_dim, stride=stride, groups=hidden_dim),
-            # pw-linear
-            nn.Conv2d(hidden_dim, oup, 1, 1, 0, bias=False), 
-            nn.BatchNorm2d(oup),
-        ])
-
-        self.conv = nn.Sequential(*layers)
-
-    def forward(self, x):
-        if self.use_res_connect:
-            return x + self.conv(x)
-        else:
-            return self.conv(x)
-
-
 class MobileNetV2Backbone(nn.Module):
     """
     Adapted from torchvision.models.mobilenet.MobileNetV2
@@ -807,8 +648,6 @@ class MobileNetV3Backbone(nn.Module):
 
 
     def add_layer(self, conv_channels=960, k=5, t=6, c=1280, se=1, hs=1, s=2):
-        """TODO: Need to make sure that this works as intended.
-        """
         self._make_layer(conv_channels, 1.0, 8, k, t, c, se, hs, s, InvertedResidualV3)
 
 
@@ -822,6 +661,217 @@ class MobileNetV3Backbone(nn.Module):
 
         state_dict = OrderedDict([(transform_dict[k], v) for k,v in self.state_dict().items()])
         self.load_state_dict(state_dict, strict=False)
+
+
+
+def efficientnet_params(model_name):
+    """Adapted from: https://github.com/lukemelas/EfficientNet-PyTorch/blob/master/efficientnet_pytorch/model.py
+    """
+    params_dict = {
+        # Coefficients:   width,depth,res,dropout
+        'efficientnet-b0': (1.0, 1.0, 224, 0.2),
+        'efficientnet-b1': (1.0, 1.1, 240, 0.2),
+        'efficientnet-b2': (1.1, 1.2, 260, 0.3),
+        'efficientnet-b3': (1.2, 1.4, 300, 0.3),
+        'efficientnet-b4': (1.4, 1.8, 380, 0.4),
+        'efficientnet-b5': (1.6, 2.2, 456, 0.4),
+        'efficientnet-b6': (1.8, 2.6, 528, 0.5),
+        'efficientnet-b7': (2.0, 3.1, 600, 0.5),
+        'efficientnet-b8': (2.2, 3.6, 672, 0.5),
+        'efficientnet-l2': (4.3, 5.3, 800, 0.5),
+    }
+    return params_dict[model_name]
+
+
+
+def efficientnet(width_coefficient=None, depth_coefficient=None, dropout_rate=0.2,
+                 drop_connect_rate=0.2, image_size=None, num_classes=1000):
+    """Adapted from: https://github.com/lukemelas/EfficientNet-PyTorch/blob/master/efficientnet_pytorch/model.py
+    """
+    blocks_args = [
+        'r1_k3_s11_e1_i32_o16_se0.25', 'r2_k3_s22_e6_i16_o24_se0.25',
+        'r2_k5_s22_e6_i24_o40_se0.25', 'r3_k3_s22_e6_i40_o80_se0.25',
+        'r3_k5_s11_e6_i80_o112_se0.25', 'r4_k5_s22_e6_i112_o192_se0.25',
+        'r1_k3_s11_e6_i192_o320_se0.25',
+    ]
+    blocks_args = BlockDecoder.decode(blocks_args)
+
+    global_params = GlobalParams(
+        batch_norm_momentum=0.99,
+        batch_norm_epsilon=1e-3,
+        dropout_rate=dropout_rate,
+        drop_connect_rate=drop_connect_rate,
+        num_classes=num_classes,
+        width_coefficient=width_coefficient,
+        depth_coefficient=depth_coefficient,
+        width_divisor=8,
+        image_size=image_size,
+    )
+
+    return blocks_args, global_params
+
+
+def get_model_params(model_name):
+    """Adapted from: https://github.com/lukemelas/EfficientNet-PyTorch/blob/master/efficientnet_pytorch/model.py
+    """
+    w, d, s, p = efficientnet_params(model_name)
+
+    blocks_args, global_params = efficientnet(
+        width_coefficient=w, depth_coefficient=d, dropout_rate=p, image_size=s)
+
+    return blocks_args, global_params
+
+
+
+class EfficientNetBackbone(nn.Module):
+    """Adapted from: https://github.com/lukemelas/EfficientNet-PyTorch/blob/master/efficientnet_pytorch/model.py
+    """
+    def __init__(self, blocks_args=None, global_params=None):
+        super().__init__()
+
+        self._global_params = global_params
+        self._blocks_args = blocks_args
+
+        bn_mom = 1 - self._global_params.batch_norm_momentum
+        bn_eps = self._global_params.batch_norm_epsilon
+
+        self._swish = swish()
+
+        self.channels = []
+        self.layers = nn.ModuleList([])
+
+        # Get stem static or dynamic convolution depending on image size
+        image_size = global_params.image_size
+        Conv2d = get_same_padding_conv2d(image_size=global_params.image_size)
+
+        # Stem
+        in_channels = 3  
+        out_channels = round_filters(32, self._global_params)  # number of output channels
+        self._conv_stem = Conv2d(in_channels, out_channels, kernel_size=3, stride=2, bias=False)
+        self._bn0 = nn.BatchNorm2d(num_features=out_channels, momentum=bn_mom, eps=bn_eps)
+        image_size = calculate_output_image_size(image_size, 2)
+
+        self.layers.append(nn.Sequential(
+            self._conv_stem,
+            self._bn0,
+            self._swish))
+
+        self.channels.append(out_channels)
+
+        # Build blocks
+        for block_args in self._blocks_args:
+            image_size, out_channels = self._make_layer(block_args, image_size)
+
+        # Head
+        in_channels = out_channels
+        out_channels = round_filters(1280, self._global_params)
+        Conv2d = get_same_padding_conv2d(image_size=image_size)
+        self._conv_head = Conv2d(in_channels, out_channels, kernel_size=1, bias=False)
+        self._bn1 = nn.BatchNorm2d(num_features=out_channels, momentum=bn_mom, eps=bn_eps)
+        self.channels.append(out_channels)
+
+        self.layers.append(nn.Sequential(
+            self._conv_head,
+            self._bn1,
+            self._swish))
+
+        self.channels.append(out_channels)
+
+        # Store for when _add_layer is called.
+        self.image_size = image_size
+        self.last_block_idx = len(self.layers) - 1
+
+
+    def _make_layer(self, block_args, image_size):
+        """A layer is multiple MBConvBlock's one after another.
+        """
+        layer = nn.ModuleList([])
+
+        out_channels = round_filters(block_args.output_filters, self._global_params)
+        self.channels.append(out_channels)
+
+        block_args = block_args._replace(
+            input_filters = round_filters(block_args.input_filters, self._global_params),
+            output_filters = out_channels,
+            num_repeat = round_repeats(block_args.num_repeat, self._global_params)
+        )
+
+        layer.append(MBConvBlock(block_args, self._global_params, image_size=image_size))
+        image_size = calculate_output_image_size(image_size, block_args.stride)
+
+        if block_args.num_repeat > 1:
+            block_args = block_args._replace(input_filters=block_args.output_filters, stride=1)
+
+        for _ in range(block_args.num_repeat - 1):
+            layer.append(MBConvBlock(block_args, self._global_params, image_size=image_size))
+
+        self.layers.append(layer)
+
+        return image_size, out_channels
+
+
+    def extract_features(self, inputs):
+        """Runs the input through the network storing every intermediate output along the way.
+        """
+        outputs = []
+
+        # Stem
+        x = self.layers[0](inputs)
+        outputs.append(x)
+
+        # Blocks
+        num_blocks = sum([len(b) for b in self.layers[1:self.last_block_idx]])
+        for idx, blocks in enumerate(self.layers[1:self.last_block_idx]):
+
+            if idx > 0:
+                start_idx = sum([len(b) for b in self.layers[1:idx+1]])
+            else:
+                start_idx = 0
+
+            for j, block in enumerate(blocks):
+                drop_connect_rate = self._global_params.drop_connect_rate
+
+                if drop_connect_rate:
+                    drop_connect_rate *= float(start_idx + j) / num_blocks
+
+                x = block(x, drop_connect_rate=drop_connect_rate)
+
+            outputs.append(x)
+
+        # Head
+        x = self.layers[self.last_block_idx](x)
+        outputs.append(x)
+
+        return outputs
+
+
+    def forward(self, inputs):
+        out = self.extract_features(inputs)
+        return out
+
+
+    def init_backbone(self, path):
+        """ Initializes the backbone weights for training. """
+        state_dict = torch.load(path)
+        state_dict.pop('_fc.weight')
+        state_dict.pop('_fc.bias')
+        self.load_state_dict(state_dict, strict=False)
+
+
+    def add_layer(self):
+        """NOTE: This is unlikely to work right now but I'm not particularly apt to fixing it now.
+        """
+        block_args = BlockArgs(kernel_size=5, 
+                               num_repeat=1,
+                               input_filters=1280,
+                               output_filters=1280,
+                               expand_ratio=6,
+                               id_skip=True,
+                               se_ratio=0.25,
+                               stride=[2])
+
+        self._make_layer(block_args, self.image_size)
+        self.layer_added = True
 
 
 def construct_backbone(cfg):

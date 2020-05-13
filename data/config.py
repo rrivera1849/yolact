@@ -1,4 +1,4 @@
-from backbone import BasicBlock, ResNetBackbone, VGGBackbone, ResNetBackboneGN, DarkNetBackbone, MobileNetV2Backbone, MobileNetV3Backbone
+from backbone import BasicBlock, ResNetBackbone, VGGBackbone, ResNetBackboneGN, DarkNetBackbone, MobileNetV2Backbone, MobileNetV3Backbone, EfficientNetBackbone, get_model_params
 from math import sqrt
 import torch
 
@@ -215,7 +215,12 @@ mobilenetv3_transform = Config({
     'to_float': False,
 })
 
-
+efficientnet_b5_transform = Config({
+    'channel_order': 'RGB',
+    'normalize': True,
+    'subtract_means': False,
+    'to_float': False,
+})
 
 # ----------------------- BACKBONES ----------------------- #
 
@@ -370,6 +375,15 @@ mobilenetv3_backbone = backbone_base.copy({
     'type': MobileNetV3Backbone,
     'args': (mobilenetv3_large_arch, 1.0),
     'transform': mobilenetv3_transform,
+})
+
+block_args, global_args = get_model_params("efficientnet-b5")
+efficientnet_b5_backbone = backbone_base.copy({
+    'name': 'EfficientNetB5',
+    'path': 'efficientnet-b5-b6417697.pth',
+    'type': EfficientNetBackbone,
+    'args': (block_args, global_args),
+    'transform': efficientnet_b5_transform,
 })
 
 # ----------------------- MASK BRANCH TYPES ----------------------- #
@@ -981,6 +995,20 @@ yolact_resnet50_embedded_config = yolact_resnet50_config.copy({
     'embedded_fpn': True,
     'embedded_pred_heads': True,
     'embedded_proto_net': True,
+})
+
+yolact_efficientnetb5_config = yolact_base_config.copy({
+    'name': 'yolact_efficientnetb5',
+
+    'backbone': efficientnet_b5_backbone.copy({
+        'selected_layers': [3, 4, 6],
+        
+        'pred_scales': yolact_base_config.backbone.pred_scales,
+        'pred_aspect_ratios': yolact_base_config.backbone.pred_aspect_ratios,
+        'use_pixel_scales': True,
+        'preapply_sqrt': False,
+        'use_square_anchors': True, # This is for backward compatability with a bug
+    }),
 })
 
 

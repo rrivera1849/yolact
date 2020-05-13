@@ -124,10 +124,10 @@ class PredictionModule(nn.Module):
                     return lambda x: x
                 else:
                     # Looks more complicated than it is. This just creates an array of num_layers alternating conv-relu
-                    relu_fn = nn.ReLU6() if cfg.embedded_pred_heads else nn.ReLU()
+                    relu_fn = nn.ReLU(inplace=True)
                     return nn.Sequential(*sum([[
                         conv_block(out_channels, out_channels, kernel_size=3, padding=1),
-                        relu_fn(inplace=True)
+                        relu_fn,
                     ] for _ in range(num_layers)], []))
 
             self.bbox_extra, self.conf_extra, self.mask_extra = [make_extra(x) for x in cfg.extra_layers]
@@ -346,7 +346,7 @@ class FPN(ScriptModuleWrapper):
         super().__init__()
 
         conv_block = MobileNetV1ConvBlock if cfg.embedded_fpn else nn.Conv2d
-        self.relu_fn = F.relu6 if cfg.embedded_fpn else F.relu
+        self.relu_fn = F.relu
 
         self.lat_layers  = nn.ModuleList([
             conv_block(x, cfg.fpn.num_features, kernel_size=1)

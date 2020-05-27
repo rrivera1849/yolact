@@ -500,6 +500,7 @@ class Yolact(nn.Module):
         super().__init__()
 
         self.backbone = construct_backbone(cfg.backbone)
+        self.backbone.selected_layers = cfg.backbone.selected_layers
 
         if cfg.freeze_bn:
             self.freeze_bn()
@@ -677,7 +678,7 @@ class Yolact(nn.Module):
         if cfg.fpn is not None:
             with timer.env('fpn'):
                 # Use backbone.selected_layers because we overwrote self.selected_layers
-                outs = [outs[i] for i in cfg.backbone.selected_layers]
+                # outs = [outs[i] for i in cfg.backbone.selected_layers]
 
                 outs = self.fpn(outs)
 

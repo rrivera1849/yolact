@@ -19,6 +19,19 @@ except ImportError:
     def DCN(*args, **kwdargs):
         raise Exception('DCN could not be imported. If you want to use YOLACT++ models, compile DCN. Check the README for instructions.')
 
+def add_to_outputs(backbone, outputs, out, idx, ignore=False):
+    """Adds `out` to the `outputs` list if it is in model.selected_layers.
+       If there is no such attribute, will append every value.
+    """
+    if ignore:
+        outputs.append(out)
+        return
+
+    if hasattr(backbone, 'selected_layers'):
+        if idx in backbone.selected_layers:
+            outputs.append(out)
+    else:
+        outputs.append(out)
 
 def conv3x3(in_planes, out_planes, stride=1, groups=1, dilation=1):
     """ Adapted from torchvision.models.resnet """
@@ -198,9 +211,10 @@ class ResNetBackbone(nn.Module):
         x = self.maxpool(x)
 
         outs = []
-        for layer in self.layers:
+        for i, layer in enumerate(self.layers):
             x = layer(x)
-            outs.append(x)
+
+            add_to_outputs(self, outs, x, i, ignore=False)
 
         return tuple(outs)
 
@@ -368,9 +382,10 @@ class DarkNetBackbone(nn.Module):
         x = self._preconv(x)
 
         outs = []
-        for layer in self.layers:
+        for i, layer in enumerate(self.layers):
             x = layer(x)
-            outs.append(x)
+
+            add_to_outputs(self, outs, x, i, ignore=False)
 
         return tuple(outs)
 
@@ -474,7 +489,8 @@ class VGGBackbone(nn.Module):
             # Note that this differs from the original implemenetation
             if idx in self.norm_lookup:
                 x = self.norms[self.norm_lookup[idx]](x)
-            outs.append(x)
+
+            add_to_outputs(self, outs, x, idx, ignore=False)
         
         return tuple(outs)
 
@@ -851,42 +867,45 @@ def calculate_padding_size(ih, iw, kh, kw, sh, sw, dh, dw):
     return pad_h, pad_w
 
 
-class Conv2dDynamicSamePadding(nn.Conv2d):
+class Conv2dDynamicSamePadding(nn.Module):
     """Adapted from: https://github.com/lukemelas/EfficientNet-PyTorch/blob/master/efficientnet_pytorch/utils.py
     """
 
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, dilation=1, groups=1, bias=True):
-        super().__init__(in_channels, out_channels, kernel_size, stride, 0, dilation, groups, bias)
-        self.stride = self.stride if len(self.stride) == 2 else [self.stride[0]] * 2
+        super(Conv2dDynamicSamePadding, self).__init__()
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, stride, 0, dilation, groups, bias)
+        self.stride = self.conv.stride if len(self.conv.stride) == 2 else [self.conv.stride[0]] * 2
 
     def forward(self, x):
         ih, iw = x.size()[-2:]
-        kh, kw = self.weight.size()[-2:]
+        kh, kw = self.conv.weight.size()[-2:]
         sh, sw = self.stride
-        dh, dw = self.dilation[0], self.dilation[1]
+        dh, dw = self.conv.dilation[0], self.conv.dilation[1]
 
         pad_h, pad_w = calculate_padding_size(ih, iw, kh, kw, sh, sw, dh, dw)
 
         if pad_h > 0 or pad_w > 0:
             x = F.pad(x, [pad_w // 2, pad_w - pad_w // 2, pad_h // 2, pad_h - pad_h // 2])
 
-        return F.conv2d(x, self.weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
+        return self.conv(x)
 
 
-class Conv2dStaticSamePadding(nn.Conv2d):
+class Conv2dStaticSamePadding(nn.Module):
     """Adapted from: https://github.com/lukemelas/EfficientNet-PyTorch/blob/master/efficientnet_pytorch/utils.py
     """
 
     def __init__(self, in_channels, out_channels, kernel_size, image_size=None, **kwargs):
-        super().__init__(in_channels, out_channels, kernel_size, **kwargs)
+        super(Conv2dStaticSamePadding, self).__init__()
         assert image_size is not None
 
-        self.stride = self.stride if len(self.stride) == 2 else [self.stride[0]] * 2
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, **kwargs)
+
+        self.stride = self.conv.stride if len(self.conv.stride) == 2 else [self.conv.stride[0]] * 2
 
         ih, iw = (image_size, image_size) if isinstance(image_size, int) else image_size
-        kh, kw = self.weight.size()[-2:]
+        kh, kw = self.conv.weight.size()[-2:]
         sh, sw = self.stride
-        dh, dw = self.dilation[0], self.dilation[1]
+        dh, dw = self.conv.dilation[0], self.conv.dilation[1]
 
         pad_h, pad_w = calculate_padding_size(ih, iw, kh, kw, sh, sw, dh, dw)
 
@@ -897,7 +916,7 @@ class Conv2dStaticSamePadding(nn.Conv2d):
 
     def forward(self, x):
         x = self.static_padding(x)
-        x = F.conv2d(x, self.weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
+        x = self.conv(x)
         return x
 
 
@@ -1047,7 +1066,7 @@ class MobileNetV2Backbone(nn.Module):
         for idx, layer in enumerate(self.layers):
             x = layer(x)
             
-            outs.append(x)
+            add_to_outputs(self, outs, x, idx, ignore=False)
         
         return tuple(outs)
 
@@ -1103,7 +1122,7 @@ class MobileNetV3Backbone(nn.Module):
         for idx, layer in enumerate(self.layers):
             x = layer(x)
             
-            outs.append(x)
+            add_to_outputs(self, outs, x, idx, ignore=False)
         
         return tuple(outs)
 
@@ -1290,7 +1309,7 @@ class EfficientNetBackbone(nn.Module):
 
         # Stem
         x = self.layers[0](inputs)
-        outputs.append(x)
+        add_to_outputs(self, outputs, x, 0, ignore=False)
 
         # Blocks
         num_blocks = sum([len(b) for b in self.layers[1:self.last_block_idx]])
@@ -1309,11 +1328,11 @@ class EfficientNetBackbone(nn.Module):
 
                 x = block(x, drop_connect_rate=drop_connect_rate)
 
-            outputs.append(x)
+            add_to_outputs(self, outputs, x, idx+1, ignore=False)
 
         # Head
         x = self.layers[self.last_block_idx](x)
-        outputs.append(x)
+        add_to_outputs(self, outputs, x, idx+2, ignore=False)
 
         return outputs
 

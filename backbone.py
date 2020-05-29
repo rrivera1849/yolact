@@ -705,7 +705,7 @@ class InvertedResidualV3(nn.Module):
 GlobalParams = collections.namedtuple('GlobalParams', [
     'batch_norm_momentum', 'batch_norm_epsilon', 'dropout_rate',
     'num_classes', 'width_coefficient', 'depth_coefficient',
-    'width_divisor', 'drop_connect_rate', 'image_size'])
+    'width_divisor', 'drop_connect_rate', 'image_size', 'activation', 'fix_stem_and_head'])
 
 
 BlockArgs = collections.namedtuple('BlockArgs', [
@@ -779,12 +779,15 @@ class BlockDecoder(object):
         return block_strings
 
 
-def round_filters(filters, global_params):
+def round_filters(filters, global_params, skip=False):
     """Calculates the appropriate filters given the width coefficient and 
        specified depth divisor.
        
        Adapted from: https://github.com/lukemelas/EfficientNet-PyTorch/blob/master/efficientnet_pytorch/utils.py
     """
+    if skip:
+        return filters
+
     new_filters = _make_divisible(filters * global_params.width_coefficient,
                                   global_params.width_divisor)
 
@@ -799,21 +802,6 @@ def round_repeats(repeats, global_params):
     multiplier = global_params.depth_coefficient
 
     return int(math.ceil(multiplier * repeats))
-
-
-def round_filters(filters, global_params):
-    """ Calculate and round number of filters based on depth multiplier. """
-    multiplier = global_params.width_coefficient
-    if not multiplier:
-        return filters
-    divisor = global_params.width_divisor
-    min_depth = None
-    filters *= multiplier
-    min_depth = min_depth or divisor
-    new_filters = max(min_depth, int(filters + divisor / 2) // divisor * divisor)
-    if new_filters < 0.9 * filters:  # prevent rounding by more than 10%
-        new_filters += divisor
-    return int(new_filters)
 
 
 def round_repeats(repeats, global_params):
@@ -971,19 +959,19 @@ class MBConvBlock(nn.Module):
         Conv2d = get_same_padding_conv2d(image_size=image_size)
         self._project_conv = Conv2d(oup, final_oup, kernel_size=1, bias=False)
         self._bn2 = nn.BatchNorm2d(final_oup, momentum=self._bn_momentum, eps=self._bn_eps)
-        self._swish = swish()
+        self._act = global_params.activation
 
     
     def forward(self, inputs, drop_connect_rate=None):
         x = inputs
         if self._block_args.expand_ratio != 1:
-            x = self._swish(self._bn0(self._expand_conv(inputs)))
+            x = self._act(self._bn0(self._expand_conv(inputs)))
 
-        x = self._swish(self._bn1(self._depthwise_conv(x)))
+        x = self._act(self._bn1(self._depthwise_conv(x)))
 
         if self.has_se:
             x_squeezed = F.adaptive_avg_pool2d(x, 1)
-            x_squeezed = self._se_expand(self._swish(self._se_reduce(x_squeezed)))
+            x_squeezed = self._se_expand(self._act(self._se_reduce(x_squeezed)))
             x = torch.sigmoid(x_squeezed) * x
 
         x = self._bn2(self._project_conv(x))
@@ -1076,15 +1064,21 @@ class MobileNetV2Backbone(nn.Module):
         """
         self._make_layer(conv_channels, 1.0, 8, t, c, n, s, InvertedResidual)
 
+
     def init_backbone(self, path):
         """ Initializes the backbone weights for training. """
         checkpoint = torch.load(path)
-        # The last two elements are the classifier so chop it off.
-        checkpoint_keys = list(checkpoint.keys())[:-2]
-        transform_dict = dict(zip(list(self.state_dict().keys()), checkpoint_keys))
 
-        state_dict = OrderedDict([(transform_dict[k], v) for k,v in self.state_dict().items()])
-        self.load_state_dict(state_dict, strict=False)
+        checkpoint.pop('classifier.1.weight')
+        checkpoint.pop('classifier.1.bias')
+
+        checkpoint_keys = list(checkpoint.keys())
+        assert len(checkpoint_keys) == len(self.state_dict())
+        transform_dict = dict(zip(checkpoint, list(self.state_dict().keys())))
+
+        state_dict = OrderedDict([(transform_dict[k], v) for k,v in checkpoint.items()])
+
+        self.load_state_dict(state_dict, strict=True)
 
 
 class MobileNetV3Backbone(nn.Module):
@@ -1144,12 +1138,18 @@ class MobileNetV3Backbone(nn.Module):
         """ Initializes the backbone weights for training. """
         checkpoint = torch.load(path)
 
-        # The last four elements are the classifier so chop it off.
-        checkpoint_keys = list(checkpoint.keys())[:-4]
-        transform_dict = dict(zip(list(self.state_dict().keys()), checkpoint_keys))
+        checkpoint.pop('classifier.0.weight')
+        checkpoint.pop('classifier.0.bias')
+        checkpoint.pop('classifier.3.weight')
+        checkpoint.pop('classifier.3.bias')
 
-        state_dict = OrderedDict([(transform_dict[k], v) for k,v in self.state_dict().items()])
-        self.load_state_dict(state_dict, strict=False)
+        checkpoint_keys = list(checkpoint.keys())
+        assert len(checkpoint_keys) == len(self.state_dict())
+        transform_dict = dict(zip(checkpoint, list(self.state_dict().keys())))
+
+        state_dict = OrderedDict([(transform_dict[k], v) for k,v in checkpoint.items()])
+
+        self.load_state_dict(state_dict, strict=True)
 
 
 def efficientnet_params(model_name):
@@ -1182,6 +1182,7 @@ def efficientnet(width_coefficient=None, depth_coefficient=None, dropout_rate=0.
         'r3_k5_s11_e6_i80_o112_se0.25', 'r4_k5_s22_e6_i112_o192_se0.25',
         'r1_k3_s11_e6_i192_o320_se0.25',
     ]
+
     blocks_args = BlockDecoder.decode(blocks_args)
 
     global_params = GlobalParams(
@@ -1194,6 +1195,56 @@ def efficientnet(width_coefficient=None, depth_coefficient=None, dropout_rate=0.
         depth_coefficient=depth_coefficient,
         width_divisor=8,
         image_size=image_size,
+        activation=swish(),
+        fix_stem_and_head=False,
+    )
+
+    return blocks_args, global_params
+
+
+def efficientnet_lite_params(model_name):
+    """Adapted from: https://github.com/lukemelas/EfficientNet-PyTorch/blob/master/efficientnet_pytorch/model.py
+    """
+    params_dict = {
+        # Coefficients:   width,depth,res,dropout
+        'efficientnet-lite0': (1.0, 1.0, 224, 0.2),
+        'efficientnet-lite1': (1.0, 1.1, 240, 0.2),
+        'efficientnet-lite2': (1.1, 1.2, 260, 0.3),
+        'efficientnet-lite3': (1.2, 1.4, 280, 0.3),
+        'efficientnet-lite4': (1.4, 1.8, 300, 0.3),
+    }
+
+    return params_dict[model_name]
+
+
+def efficientnet_lite(width_coefficient=None, depth_coefficient=None, dropout_rate=0.2,
+                      drop_connect_rate=0.2, image_size=None, num_classes=1000):
+    """Adapted from: https://github.com/rwightman/gen-efficientnet-pytorch/blob/master/geffnet/gen_efficientnet.py
+    """
+    blocks_args = [
+        'r1_k3_s11_e1_i32_o16',
+        'r2_k3_s22_e6_i16_o24',
+        'r2_k5_s22_e6_i24_o40',
+        'r3_k3_s22_e6_i40_o80',
+        'r3_k5_s11_e6_i80_o112',
+        'r4_k5_s22_e6_i112_o192',
+        'r1_k3_s11_e6_i192_o320',
+    ]
+
+    blocks_args = BlockDecoder.decode(blocks_args)
+
+    global_params = GlobalParams(
+        batch_norm_momentum=0.99,
+        batch_norm_epsilon=1e-3,
+        dropout_rate=dropout_rate,
+        drop_connect_rate=drop_connect_rate,
+        num_classes=num_classes,
+        width_coefficient=width_coefficient,
+        depth_coefficient=depth_coefficient,
+        width_divisor=8,
+        image_size=image_size,
+        activation=nn.ReLU6(inplace=True),
+        fix_stem_and_head=True,
     )
 
     return blocks_args, global_params
@@ -1202,28 +1253,39 @@ def efficientnet(width_coefficient=None, depth_coefficient=None, dropout_rate=0.
 def get_model_params(model_name):
     """Adapted from: https://github.com/lukemelas/EfficientNet-PyTorch/blob/master/efficientnet_pytorch/model.py
     """
-    w, d, s, p = efficientnet_params(model_name)
+    lite = 'lite' in model_name
 
-    blocks_args, global_params = efficientnet(
-        width_coefficient=w, depth_coefficient=d, dropout_rate=p, image_size=s)
+    if lite:
+        w, d, s, p = efficientnet_lite_params(model_name)
+    else:
+        w, d, s, p = efficientnet_params(model_name)
+
+    if lite:
+        blocks_args, global_params = efficientnet_lite(
+            width_coefficient=w, depth_coefficient=d, dropout_rate=p, image_size=s)
+    else:
+        blocks_args, global_params = efficientnet(
+            width_coefficient=w, depth_coefficient=d, dropout_rate=p, image_size=s)
 
     return blocks_args, global_params
-
 
 
 class EfficientNetBackbone(nn.Module):
     """Adapted from: https://github.com/lukemelas/EfficientNet-PyTorch/blob/master/efficientnet_pytorch/model.py
     """
     def __init__(self, blocks_args=None, global_params=None):
-        super().__init__()
+        super(EfficientNetBackbone, self).__init__()
 
         self._global_params = global_params
         self._blocks_args = blocks_args
 
+        # EfficientNet-Lite models have a fixed head / stem
+        self.lite = self._global_params.fix_stem_and_head
+
         bn_mom = 1 - self._global_params.batch_norm_momentum
         bn_eps = self._global_params.batch_norm_epsilon
 
-        self._swish = swish()
+        self._act = self._global_params.activation
 
         self.channels = []
         self.layers = nn.ModuleList([])
@@ -1234,34 +1296,37 @@ class EfficientNetBackbone(nn.Module):
 
         # Stem
         in_channels = 3  
-        out_channels = round_filters(32, self._global_params)  # number of output channels
-        self._conv_stem = Conv2d(in_channels, out_channels, kernel_size=3, stride=2, bias=False)
-        self._bn0 = nn.BatchNorm2d(num_features=out_channels, momentum=bn_mom, eps=bn_eps)
+        out_channels = round_filters(32, self._global_params, self._global_params.fix_stem_and_head) 
+        _conv_stem = Conv2d(in_channels, out_channels, kernel_size=3, stride=2, bias=False)
+        _bn0 = nn.BatchNorm2d(num_features=out_channels, momentum=bn_mom, eps=bn_eps)
         image_size = calculate_output_image_size(image_size, 2)
 
         self.layers.append(nn.Sequential(
-            self._conv_stem,
-            self._bn0,
-            self._swish))
+            _conv_stem,
+            _bn0,
+            self._act))
 
         self.channels.append(out_channels)
 
         # Build blocks
-        for block_args in self._blocks_args:
-            image_size, out_channels = self._make_layer(block_args, image_size)
+        for i, block_args in enumerate(self._blocks_args):
+            first = i == 0
+            last  = i == len(self._blocks_args) - 1
+
+            image_size, out_channels = self._make_layer(block_args, out_channels, image_size, first=first, last=last)
 
         # Head
         in_channels = out_channels
-        out_channels = round_filters(1280, self._global_params)
+        out_channels = round_filters(1280, self._global_params, self._global_params.fix_stem_and_head)
         Conv2d = get_same_padding_conv2d(image_size=image_size)
-        self._conv_head = Conv2d(in_channels, out_channels, kernel_size=1, bias=False)
-        self._bn1 = nn.BatchNorm2d(num_features=out_channels, momentum=bn_mom, eps=bn_eps)
+        _conv_head = Conv2d(in_channels, out_channels, kernel_size=1, bias=False)
+        _bn1 = nn.BatchNorm2d(num_features=out_channels, momentum=bn_mom, eps=bn_eps)
         self.channels.append(out_channels)
 
         self.layers.append(nn.Sequential(
-            self._conv_head,
-            self._bn1,
-            self._swish))
+            _conv_head,
+            _bn1,
+            self._act))
 
         self.channels.append(out_channels)
 
@@ -1274,7 +1339,7 @@ class EfficientNetBackbone(nn.Module):
         self.backbone_modules = [m for m in self.modules() if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear)]
 
 
-    def _make_layer(self, block_args, image_size):
+    def _make_layer(self, block_args, in_channels, image_size, first=False, last=False):
         """A layer is multiple MBConvBlock's one after another.
         """
         layer = nn.ModuleList([])
@@ -1282,10 +1347,16 @@ class EfficientNetBackbone(nn.Module):
         out_channels = round_filters(block_args.output_filters, self._global_params)
         self.channels.append(out_channels)
 
+        if self.lite and (first or last):
+            num_repeats = block_args.num_repeat
+        else:
+            num_repeats = round_repeats(block_args.num_repeat, self._global_params)
+
         block_args = block_args._replace(
-            input_filters = round_filters(block_args.input_filters, self._global_params),
+            # input_filters = round_filters(block_args.input_filters, self._global_params),
+            input_filters = in_channels,
             output_filters = out_channels,
-            num_repeat = round_repeats(block_args.num_repeat, self._global_params)
+            num_repeat = num_repeats,
         )
 
         layer.append(MBConvBlock(block_args, self._global_params, image_size=image_size))
@@ -1344,10 +1415,23 @@ class EfficientNetBackbone(nn.Module):
 
     def init_backbone(self, path):
         """ Initializes the backbone weights for training. """
-        state_dict = torch.load(path)
-        state_dict.pop('_fc.weight')
-        state_dict.pop('_fc.bias')
-        self.load_state_dict(state_dict, strict=False)
+        checkpoint = torch.load(path)
+
+        if self.lite:
+            checkpoint.pop('classifier.weight')
+            checkpoint.pop('classifier.bias')
+        else:
+            checkpoint.pop('_fc.weight')
+            checkpoint.pop('_fc.bias')
+
+        # Pop off the classifier
+        checkpoint_keys = list(checkpoint.keys())
+        assert len(checkpoint_keys) == len(self.state_dict())
+
+        transform_dict = dict(zip(checkpoint, list(self.state_dict().keys())))
+        state_dict = OrderedDict([(transform_dict[k], v) for k,v in checkpoint.items()])
+
+        self.load_state_dict(state_dict, strict=True)
 
 
     def add_layer(self):
@@ -1361,6 +1445,10 @@ class EfficientNetBackbone(nn.Module):
                                id_skip=True,
                                se_ratio=0.25,
                                stride=[2])
+
+        # EfficientNet-Lite models have no SqueezeExcite modules
+        if self.lite:
+            block_args.se_ratio = None
 
         self._make_layer(block_args, self.image_size)
         self.layer_added = True
@@ -1377,4 +1465,75 @@ def construct_backbone(cfg):
         backbone.add_layer()
 
     return backbone
+
+
+# Just some quick testing code
+if __name__ == "__main__":
+
+    weights = [
+            "efficientnet-b0-355c32eb.pth",
+            "efficientnet-b1-f1951068.pth",
+            "efficientnet-b2-8bb594d6.pth",
+            "efficientnet-b3-5fb5a3c3.pth",
+            "efficientnet-b4-6ed6700e.pth",
+            "efficientnet-b5-b6417697.pth",
+            "efficientnet-b6-c76e70fd.pth",
+            "efficientnet-b7-dcc49843.pth",
+            "efficientnet-lite0-0aa007d2.pth",
+            "efficientnet-lite1-bde8b488.pth",
+            "efficientnet-lite2-dcccb7df.pth",
+            "efficientnet-lite4-741542c3.pth",
+        ]
+
+    for i, weight_fname in enumerate(weights):
+        model_name = '-'.join(weight_fname.split('-')[:2])
+        print("Loading: {}".format(model_name))
+
+        block_args, global_args = get_model_params(model_name)
+
+        model = EfficientNetBackbone(block_args, global_args)
+        model.init_backbone("./weights/{}".format(weight_fname))
+
+        x = torch.randn(1, 3, 450, 450)
+        out = model(x)
+
+        print(out[-1].shape)
+
+    mobilenetv3_large_arch = [
+        # k, t, c, SE, HS, s 
+        [3,   1,  16, 0, 0, 1],
+        [3,   4,  24, 0, 0, 2],
+        [3,   3,  24, 0, 0, 1],
+        [5,   3,  40, 1, 0, 2],
+        [5,   3,  40, 1, 0, 1],
+        [5,   3,  40, 1, 0, 1],
+        [3,   6,  80, 0, 1, 2],
+        [3, 2.5,  80, 0, 1, 1],
+        [3, 2.3,  80, 0, 1, 1],
+        [3, 2.3,  80, 0, 1, 1],
+        [3,   6, 112, 1, 1, 1],
+        [3,   6, 112, 1, 1, 1],
+        [5,   6, 160, 1, 1, 2],
+        [5,   6, 160, 1, 1, 1],
+        [5,   6, 160, 1, 1, 1]
+    ]
+
+    print("MobileNetV3")
+    model = MobileNetV3Backbone(mobilenetv3_large_arch)
+    model.init_backbone("./weights/mobilenetv3-large-1cd25616.pth")
+
+    mobilenetv2_arch = [
+        # t, c, n, s
+        [1, 16, 1, 1],
+        [6, 24, 2, 2],
+        [6, 32, 3, 2],
+        [6, 64, 4, 2],
+        [6, 96, 3, 1],
+        [6, 160, 3, 2],
+        [6, 320, 1, 1],
+    ]
+
+    print("MobileNetV2")
+    model = MobileNetV2Backbone(1.0, mobilenetv2_arch, 8)
+    model.init_backbone("./weights/mobilenet_v2-b0353104.pth")
 

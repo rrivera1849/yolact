@@ -222,6 +222,13 @@ efficientnet_b3_transform = Config({
     'to_float': False,
 })
 
+efficientnet_lite2_transform = Config({
+    'channel_order': 'RGB',
+    'normalize': True,
+    'subtract_means': False,
+    'to_float': False,
+})
+
 # ----------------------- BACKBONES ----------------------- #
 
 backbone_base = Config({
@@ -384,6 +391,15 @@ efficientnet_b3_backbone = backbone_base.copy({
     'type': EfficientNetBackbone,
     'args': (block_args, global_args),
     'transform': efficientnet_b3_transform,
+})
+
+block_args, global_args = get_model_params("efficientnet-lite2")
+efficientnet_lite2_backbone = backbone_base.copy({
+    'name': 'EfficientNetLite2',
+    'path': 'efficientnet-lite2-dcccb7df.pth',
+    'type': EfficientNetBackbone,
+    'args': (block_args, global_args),
+    'transform': efficientnet_lite2_transform,
 })
 
 # ----------------------- MASK BRANCH TYPES ----------------------- #
@@ -1001,6 +1017,20 @@ yolact_efficientnetb3_config = yolact_base_config.copy({
     'name': 'yolact_efficientnetb3',
 
     'backbone': efficientnet_b3_backbone.copy({
+        'selected_layers': [3, 4, 6],
+        
+        'pred_scales': yolact_base_config.backbone.pred_scales,
+        'pred_aspect_ratios': yolact_base_config.backbone.pred_aspect_ratios,
+        'use_pixel_scales': True,
+        'preapply_sqrt': False,
+        'use_square_anchors': True, # This is for backward compatability with a bug
+    }),
+})
+
+yolact_efficientnetlite2_config = yolact_base_config.copy({
+    'name': 'yolact_efficientnetlite2',
+
+    'backbone': efficientnet_lite2_backbone.copy({
         'selected_layers': [3, 4, 6],
         
         'pred_scales': yolact_base_config.backbone.pred_scales,

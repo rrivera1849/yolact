@@ -15,6 +15,7 @@ from data.config import cfg, mask_type
 from layers import Detect
 from layers.embedded import MobileNetV1ConvBlock
 from layers.interpolate import InterpolateModule
+from layers.nas_fpn import SumCell, GlobalPoolingCell
 from backbone import construct_backbone, InvertedResidual # TODO
 
 import torch.backends.cudnn as cudnn
@@ -324,6 +325,7 @@ class PredictionModule(nn.Module):
         
         return self.priors
 
+
 class FPN(ScriptModuleWrapper):
     """
     Implements a general version of the FPN introduced in
@@ -372,6 +374,7 @@ class FPN(ScriptModuleWrapper):
         self.use_conv_downsample    = cfg.fpn.use_conv_downsample
         self.relu_downsample_layers = cfg.fpn.relu_downsample_layers
         self.relu_pred_layers       = cfg.fpn.relu_pred_layers
+
 
     def to_tensorrt(self, int8_mode=False):
         """Converts all the prediction and lat layers to a TRTModule
@@ -459,6 +462,116 @@ class FPN(ScriptModuleWrapper):
 
         return out
 
+
+class NASFPN(nn.Module):
+    """
+    Implements the NAS-FPN architecture introduced in: 
+    https://arxiv.org/pdf/1904.07392.pdf
+
+    Note, this implementation does NOT allow for an arbitrary number of 
+    inputs like the FPN implemented above. This is because the architecture 
+    was developed using NAS and thus the inputs are fixed.
+
+    Parameters (in cfg.fpn):
+        - num_features (int): The number of output features in the fpn layers.
+        - interpolation_mode (str): The mode to pass to F.interpolate.
+        - num_downsample (int): The number of downsampled layers to add onto the selected layers.
+                                These extra layers are downsampled from the last selected layer.
+        - stack_times (int): The number of times to repeat the operations of the pyramid stack.
+    Args:
+        - in_channels (list): For each conv layer you supply in the forward pass,
+                              how many features will it have?
+    """
+
+    def __init__(self, in_channels):
+        super().__init__()
+
+        self.in_channels = in_channels
+        self.out_channels = cfg.fpn.num_features
+        self.num_ins = len(self.in_channels)
+        self.stack_times = cfg.fpn.stack_times
+        self.num_downsample = None
+
+        self.lat_layers = nn.ModuleList()
+        for x in in_channels:
+            self.lat_layers.append(nn.Sequential(
+                    nn.Conv2d(x, self.out_channels, kernel_size=1, bias=False),
+                    nn.BatchNorm2d(self.out_channels),
+                    nn.ReLU(inplace=True),
+                ))
+
+
+        if cfg.fpn.use_conv_downsample:
+            self.num_downsample = cfg.fpn.num_downsample
+            self.downsample_layers = nn.ModuleList()
+            for _ in range(self.num_downsample):
+                self.downsample_layers.append(nn.Sequential(
+                    nn.Conv2d(self.out_channels, self.out_channels, kernel_size=1),
+                    nn.BatchNorm2d(self.out_channels),
+                    nn.ReLU(inplace=True),
+                    nn.MaxPool2d(2, 2),
+                ))
+
+
+        self.fpn_stages = nn.ModuleList()
+
+        sum_cell = partial(SumCell, 
+                           self.out_channels, self.out_channels,
+                           cfg.fpn.interpolation_mode)
+
+        gp_cell = partial(GlobalPoolingCell, 
+                          self.out_channels, self.out_channels,
+                          cfg.fpn.interpolation_mode)
+
+        for _ in range(self.stack_times):
+            stage = nn.ModuleDict()
+
+            stage['gp_64_4'] = gp_cell()
+            stage['sum_44_4'] = sum_cell()
+            stage['sum_43_3'] = sum_cell()
+            stage['sum_34_4'] = sum_cell()
+            stage['gp_43_5'] = gp_cell()
+            stage['sum_55_5'] = sum_cell()
+            stage['gp_54_7'] = gp_cell()
+            stage['sum_77_7'] = sum_cell()
+            stage['gp_75_6'] = gp_cell()
+
+            self.fpn_stages.append(stage)
+
+
+    def forward(self, convouts:List[torch.Tensor]):
+
+        feats = []
+
+        for i, x in enumerate(reversed(convouts)):
+            feats.append(self.lat_layers[i](x))
+
+        if self.num_downsample:
+            for i in range(self.num_downsample):
+                feats.append(self.downsample_layers[i](feats[-1]))
+
+        p3, p4, p5, p6, p7 = feats
+
+        for stage in self.fpn_stages:
+            p4_1 = stage['gp_64_4'](p6, p4, p4.shape[-2:])
+
+            p4_2 = stage['sum_44_4'](p4_1, p4, p4.shape[-2:])
+
+            p3 = stage['sum_43_3'](p4_2, p3, p3.shape[-2:])
+
+            p4 = stage['sum_34_4'](p3, p4_2, p4.shape[-2:])
+
+            p5_tmp = stage['gp_43_5'](p4, p3, p5.shape[-2:])
+
+            p5 = stage['sum_55_5'](p5, p5_tmp, p5.shape[-2:])
+
+            p7_tmp = stage['gp_54_7'](p5, p4_2, p7.shape[-2:])
+
+            p7 = stage['sum_77_7'](p7, p7_tmp, p7.shape[-2:])
+
+            p6 = stage['gp_75_6'](p7, p5, p6.shape[-2:])
+
+        return p3, p4, p5, p6, p7
 
 class FastMaskIoUNet(ScriptModuleWrapper):
 
@@ -851,3 +964,24 @@ if __name__ == '__main__':
             print('Avg fps: %.2f\tAvg ms: %.2f         ' % (1/avg.get_avg(), avg.get_avg()*1000))
     except KeyboardInterrupt:
         pass
+
+# # Testing code for NAS FPN
+# if __name__ == '__main__':
+    # cfg.fpn.use_conv_downsample = True
+    # cfg.fpn.num_downsample = 2
+    # cfg.fpn.num_features = 256
+    # cfg.fpn.stack_times = 2
+
+    # in_channels = [256, 512, 1024]
+
+    # convouts = [
+            # torch.randn(1, 1024, 16, 16),
+            # torch.randn(1, 512, 32, 32),
+            # torch.randn(1, 256, 64, 64)
+            # ]
+
+    # fpn = NASFPN(in_channels)
+    # outs = fpn(convouts)
+
+    # for out in outs:
+        # print(out.size())

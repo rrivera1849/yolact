@@ -13,10 +13,9 @@ from collections import defaultdict
 
 from data.config import cfg, mask_type
 from layers import Detect
-from layers.embedded import MobileNetV1ConvBlock
 from layers.interpolate import InterpolateModule
 from layers.nas_fpn import SumCell, GlobalPoolingCell
-from backbone import construct_backbone, InvertedResidual # TODO
+from backbone import construct_backbone
 
 import torch.backends.cudnn as cudnn
 from utils import timer
@@ -79,8 +78,6 @@ class PredictionModule(nn.Module):
     def __init__(self, in_channels, out_channels=1024, aspect_ratios=[[1]], scales=[1], parent=None, index=0):
         super().__init__()
 
-        conv_block = MobileNetV1ConvBlock if cfg.embedded_pred_heads else nn.Conv2d
-
         self.num_classes = cfg.num_classes
         self.mask_dim    = cfg.mask_dim # Defined by Yolact
         self.num_priors  = sum(len(x)*len(scales) for x in aspect_ratios)
@@ -98,26 +95,23 @@ class PredictionModule(nn.Module):
             if cfg.extra_head_net is None:
                 out_channels = in_channels
             else:
-                self.upfeature, out_channels = make_net(in_channels, cfg.extra_head_net, embedded=cfg.embedded_pred_heads)
+                self.upfeature, out_channels = make_net(in_channels, cfg.extra_head_net)
 
             if cfg.use_prediction_module:
-                if cfg.embedded_pred_heads:
-                    self.block = InvertedResidual(out_channels, out_channels // 4, stride=1, expand_ratio=6)
-                else:
-                    self.block = Bottleneck(out_channels, out_channels // 4)
+                self.block = Bottleneck(out_channels, out_channels // 4)
 
-                self.conv = conv_block(out_channels, out_channels, kernel_size=1, bias=True)
+                self.conv = nn.Conv2d(out_channels, out_channels, kernel_size=1, bias=True)
                 self.bn = nn.BatchNorm2d(out_channels)
 
-            self.bbox_layer = conv_block(out_channels, self.num_priors * 4,                **cfg.head_layer_params)
-            self.conf_layer = conv_block(out_channels, self.num_priors * self.num_classes, **cfg.head_layer_params)
-            self.mask_layer = conv_block(out_channels, self.num_priors * self.mask_dim,    **cfg.head_layer_params)
+            self.bbox_layer = nn.Conv2d(out_channels, self.num_priors * 4,                **cfg.head_layer_params)
+            self.conf_layer = nn.Conv2d(out_channels, self.num_priors * self.num_classes, **cfg.head_layer_params)
+            self.mask_layer = nn.Conv2d(out_channels, self.num_priors * self.mask_dim,    **cfg.head_layer_params)
             
             if cfg.use_mask_scoring:
-                self.score_layer = conv_block(out_channels, self.num_priors, **cfg.head_layer_params)
+                self.score_layer = nn.Conv2d(out_channels, self.num_priors, **cfg.head_layer_params)
 
             if cfg.use_instance_coeff:
-                self.inst_layer = conv_block(out_channels, self.num_priors * cfg.num_instance_coeffs, **cfg.head_layer_params)
+                self.inst_layer = nn.Conv2d(out_channels, self.num_priors * cfg.num_instance_coeffs, **cfg.head_layer_params)
             
             # What is this ugly lambda doing in the middle of all this clean prediction module code?
             def make_extra(num_layers):
@@ -125,16 +119,15 @@ class PredictionModule(nn.Module):
                     return lambda x: x
                 else:
                     # Looks more complicated than it is. This just creates an array of num_layers alternating conv-relu
-                    relu_fn = nn.ReLU(inplace=True)
                     return nn.Sequential(*sum([[
-                        conv_block(out_channels, out_channels, kernel_size=3, padding=1),
-                        relu_fn,
+                        nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+                        nn.ReLU(inplace=True),
                     ] for _ in range(num_layers)], []))
 
             self.bbox_extra, self.conf_extra, self.mask_extra = [make_extra(x) for x in cfg.extra_layers]
             
             if cfg.mask_type == mask_type.lincomb and cfg.mask_proto_coeff_gate:
-                self.gate_layer = conv_block(out_channels, self.num_priors * self.mask_dim, kernel_size=3, padding=1)
+                self.gate_layer = nn.Conv2d(out_channels, self.num_priors * self.mask_dim, kernel_size=3, padding=1)
 
         self.aspect_ratios = aspect_ratios
         self.scales = scales
@@ -347,25 +340,23 @@ class FPN(ScriptModuleWrapper):
     def __init__(self, in_channels):
         super().__init__()
 
-        conv_block = MobileNetV1ConvBlock if cfg.embedded_fpn else nn.Conv2d
-        self.relu_fn = F.relu
         self.src_channels = in_channels
 
         self.lat_layers  = nn.ModuleList([
-            conv_block(x, cfg.fpn.num_features, kernel_size=1)
+            nn.Conv2d(x, cfg.fpn.num_features, kernel_size=1)
             for x in reversed(in_channels)
         ])
 
         # This is here for backwards compatability
         padding = 1 if cfg.fpn.pad else 0
         self.pred_layers = nn.ModuleList([
-            conv_block(cfg.fpn.num_features, cfg.fpn.num_features, kernel_size=3, padding=padding)
+            nn.Conv2d(cfg.fpn.num_features, cfg.fpn.num_features, kernel_size=3, padding=padding)
             for _ in in_channels
         ])
 
         if cfg.fpn.use_conv_downsample:
             self.downsample_layers = nn.ModuleList([
-                conv_block(cfg.fpn.num_features, cfg.fpn.num_features, kernel_size=3, padding=1, stride=2)
+                nn.Conv2d(cfg.fpn.num_features, cfg.fpn.num_features, kernel_size=3, padding=1, stride=2)
                 for _ in range(cfg.fpn.num_downsample)
             ])
         
@@ -443,7 +434,7 @@ class FPN(ScriptModuleWrapper):
             out[j] = pred_layer(out[j])
 
             if self.relu_pred_layers:
-                self.relu_fn(out[j], inplace=True)
+                F.relu(out[j], inplace=True)
 
         cur_idx = len(out)
 
@@ -458,7 +449,7 @@ class FPN(ScriptModuleWrapper):
 
         if self.relu_downsample_layers:
             for idx in range(len(out) - cur_idx):
-                out[idx] = self.relu_fn(out[idx + cur_idx], inplace=False)
+                out[idx] = F.relu(out[idx + cur_idx], inplace=False)
 
         return out
 
@@ -637,8 +628,7 @@ class Yolact(nn.Module):
 
             # The include_last_relu=false here is because we might want to change it to another function
             self.proto_net, cfg.mask_dim = make_net(in_channels, cfg.mask_proto_net, 
-                                                    include_last_relu=False,
-                                                    embedded=cfg.embedded_proto_net)
+                                                    include_last_relu=False)
 
             if cfg.mask_proto_bias:
                 cfg.mask_dim += 1

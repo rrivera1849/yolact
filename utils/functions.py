@@ -4,7 +4,6 @@ import os
 import math
 from collections import deque
 from pathlib import Path
-from layers.embedded import MobileNetV1ConvBlock
 from layers.interpolate import InterpolateModule
 
 class MovingAverage():
@@ -161,7 +160,7 @@ class SavePath:
 
         return max_name
 
-def make_net(in_channels, conf, include_last_relu=True, embedded=False):
+def make_net(in_channels, conf, include_last_relu=True):
     """
     A helper function to take a config setting and turn it into a network.
     Used by protonet and extrahead. Returns (network, out_channels)
@@ -189,10 +188,7 @@ def make_net(in_channels, conf, include_last_relu=True, embedded=False):
             kernel_size = layer_cfg[1]
 
             if kernel_size > 0:
-                if embedded:
-                    layer = MobileNetV1ConvBlock(in_channels, num_channels, kernel_size, **layer_cfg[2])
-                else:
-                    layer = nn.Conv2d(in_channels, num_channels, kernel_size, **layer_cfg[2])
+                layer = nn.Conv2d(in_channels, num_channels, kernel_size, **layer_cfg[2])
             else:
                 if num_channels is None:
                     layer = InterpolateModule(scale_factor=-kernel_size, mode='bilinear', align_corners=False, **layer_cfg[2])
@@ -207,10 +203,7 @@ def make_net(in_channels, conf, include_last_relu=True, embedded=False):
         # if num_channels is None:
         #     return [layer]
         # else:
-        if embedded:
-            return [layer, nn.ReLU6(inplace=True)]
-        else:
-            return [layer, nn.ReLU(inplace=True)]
+        return [layer, nn.ReLU(inplace=True)]
 
     # Use sum to concat together all the component layer lists
     net = sum([make_layer(x) for x in conf], [])

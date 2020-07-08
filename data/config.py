@@ -478,6 +478,15 @@ fpn_base = Config({
 
     # Whether to add relu to the regular layers
     'relu_pred_layers': True,
+
+    ########################################
+    # YOLACT Embedded
+    ########################################
+
+    # Whether or not to use NAS-FPN instead of the regular FPN. 
+    # In this case, many of the parameters above are ignored except for 
+    # `num_features`, `interpolation_mode`, and `num_downsample`.
+    'use_nas_fpn': False,
 })
 
 
@@ -725,6 +734,7 @@ coco_base_config = Config({
 
 # ----------------------- YOLACT v1.0 CONFIGS ----------------------- #
 
+
 yolact_base_config = coco_base_config.copy({
     'name': 'yolact_base',
 
@@ -773,10 +783,6 @@ yolact_base_config = coco_base_config.copy({
     'crowd_iou_threshold': 0.7,
 
     'use_semantic_segmentation_loss': True,
-
-    # YOLACT Embedded
-
-    'use_nas_fpn': False,
 })
 
 yolact_im400_config = yolact_base_config.copy({
@@ -823,6 +829,17 @@ yolact_resnet50_config = yolact_base_config.copy({
         'use_pixel_scales': True,
         'preapply_sqrt': False,
         'use_square_anchors': True, # This is for backward compatability with a bug
+    }),
+})
+
+yolact_resnet50_nasfpn_config = yolact_resnet50_config.copy({
+    'name': 'yolact_resnet50_nasfpn_config', 
+
+    # FPN Settings
+    'fpn': fpn_base.copy({
+        'use_conv_downsample': True,
+        'num_downsample': 2,
+        'use_nas_fpn': True,
     }),
 })
 
@@ -935,6 +952,28 @@ yolact_mobilenetv3_config = yolact_base_config.copy({
         'use_pixel_scales': True,
         'preapply_sqrt': False,
         'use_square_anchors': True, # This is for backward compatability with a bug
+    }),
+})
+
+yolact_mobilenetv2_nasfpn_config = yolact_mobilenetv2_config.copy({
+    'name': 'yolact_mobilenetv2_nasfpn_config', 
+
+    # FPN Settings
+    'fpn': fpn_base.copy({
+        'use_conv_downsample': True,
+        'num_downsample': 2,
+        'use_nas_fpn': True,
+    }),
+})
+
+yolact_mobilenetv3_nasfpn_config = yolact_mobilenetv3_config.copy({
+    'name': 'yolact_mobilenetv3_nasfpn_config', 
+
+    # FPN Settings
+    'fpn': fpn_base.copy({
+        'use_conv_downsample': True,
+        'num_downsample': 2,
+        'use_nas_fpn': True,
     }),
 })
 

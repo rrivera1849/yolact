@@ -534,7 +534,7 @@ class NASFPN(nn.Module):
 
         feats = []
 
-        for i, x in enumerate(reversed(convouts)):
+        for i, x in enumerate(convouts):
             feats.append(self.lat_layers[i](x))
 
         if self.num_downsample:
@@ -642,7 +642,11 @@ class Yolact(nn.Module):
 
         if cfg.fpn is not None:
             # Some hacky rewiring to accomodate the FPN
-            self.fpn = FPN([src_channels[i] for i in self.selected_layers])
+            if cfg.fpn.use_nas_fpn:
+                self.fpn = NASFPN([src_channels[i] for i in self.selected_layers])
+            else:
+                self.fpn = FPN([src_channels[i] for i in self.selected_layers])
+
             self.selected_layers = list(range(len(self.selected_layers) + cfg.fpn.num_downsample))
             src_channels = [cfg.fpn.num_features] * len(self.selected_layers)
 
@@ -910,50 +914,50 @@ class Yolact(nn.Module):
         # self.proto_net = trt_fn(self.proto_net, [x])
 
 
-# Some testing code
-if __name__ == '__main__':
-    from utils.functions import init_console
-    init_console()
+# # Some testing code
+# if __name__ == '__main__':
+    # from utils.functions import init_console
+    # init_console()
 
-    # Use the first argument to set the config if you want
-    import sys
-    if len(sys.argv) > 1:
-        from data.config import set_cfg
-        set_cfg(sys.argv[1])
+    # # Use the first argument to set the config if you want
+    # import sys
+    # if len(sys.argv) > 1:
+        # from data.config import set_cfg
+        # set_cfg(sys.argv[1])
 
-    net = Yolact()
-    net.train()
-    net.init_weights(backbone_path='weights/' + cfg.backbone.path)
+    # net = Yolact()
+    # net.train()
+    # net.init_weights(backbone_path='weights/' + cfg.backbone.path)
 
-    # GPU
-    net = net.cuda()
-    torch.set_default_tensor_type('torch.cuda.FloatTensor')
+    # # GPU
+    # net = net.cuda()
+    # torch.set_default_tensor_type('torch.cuda.FloatTensor')
 
-    x = torch.zeros((1, 3, cfg.max_size, cfg.max_size))
-    y = net(x)
+    # x = torch.zeros((1, 3, cfg.max_size, cfg.max_size))
+    # y = net(x)
 
-    for p in net.prediction_layers:
-        print(p.last_conv_size)
+    # for p in net.prediction_layers:
+        # print(p.last_conv_size)
 
-    print()
-    for k, a in y.items():
-        print(k + ': ', a.size(), torch.sum(a))
-    exit()
+    # print()
+    # for k, a in y.items():
+        # print(k + ': ', a.size(), torch.sum(a))
+    # exit()
     
-    net(x)
-    # timer.disable('pass2')
-    avg = MovingAverage()
-    try:
-        while True:
-            timer.reset()
-            with timer.env('everything else'):
-                net(x)
-            avg.add(timer.total_time())
-            print('\033[2J') # Moves console cursor to 0,0
-            timer.print_stats()
-            print('Avg fps: %.2f\tAvg ms: %.2f         ' % (1/avg.get_avg(), avg.get_avg()*1000))
-    except KeyboardInterrupt:
-        pass
+    # net(x)
+    # # timer.disable('pass2')
+    # avg = MovingAverage()
+    # try:
+        # while True:
+            # timer.reset()
+            # with timer.env('everything else'):
+                # net(x)
+            # avg.add(timer.total_time())
+            # print('\033[2J') # Moves console cursor to 0,0
+            # timer.print_stats()
+            # print('Avg fps: %.2f\tAvg ms: %.2f         ' % (1/avg.get_avg(), avg.get_avg()*1000))
+    # except KeyboardInterrupt:
+        # pass
 
 # # Testing code for NAS FPN
 # if __name__ == '__main__':
@@ -965,9 +969,9 @@ if __name__ == '__main__':
     # in_channels = [256, 512, 1024]
 
     # convouts = [
-            # torch.randn(1, 1024, 16, 16),
+            # torch.randn(1, 256, 64, 64),
             # torch.randn(1, 512, 32, 32),
-            # torch.randn(1, 256, 64, 64)
+            # torch.randn(1, 1024, 16, 16),
             # ]
 
     # fpn = NASFPN(in_channels)

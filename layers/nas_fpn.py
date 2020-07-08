@@ -14,7 +14,15 @@ def resize(x, size, upsample_mode):
     elif x.shape[-2:] < size:
         return F.interpolate(x, size=size, mode=upsample_mode, align_corners=False)
     else:
-        assert x.shape[-2] % size[-2] == 0 and x.shape[-1] % size[-1] == 0
+        # If the shapes aren't evenly divisible we do enough padding so that they 
+        # are and then apply the maxpool.
+        if (x.shape[-2] % size[-2] != 0 and x.shape[-1] % size[-1] != 0):
+            multiple = (x.shape[-2] // size[0]) + 1
+            pad_amount = (size[0] * multiple) - x.shape[-2]
+            pad = (0, pad_amount, 0, pad_amount)
+
+            x = F.pad(x, pad, mode="constant", value=0)
+
         kernel_size = x.shape[-1] // size[-1]
         x = F.max_pool2d(x, kernel_size=kernel_size, stride=kernel_size)
         return x

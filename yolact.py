@@ -31,8 +31,8 @@ if not use_jit:
     print('Multiple GPUs detected! Turning off JIT.')
 
 # TODO: Incompatible with torch2trt, will have to find a workaround. 
-ScriptModuleWrapper = torch.jit.ScriptModule if use_jit else nn.Module
-# ScriptModuleWrapper = nn.Module
+# ScriptModuleWrapper = torch.jit.ScriptModule if use_jit else nn.Module
+ScriptModuleWrapper = nn.Module
 script_method_wrapper = torch.jit.script_method if use_jit else lambda fn, _rcn=None: fn
 
 
@@ -350,13 +350,15 @@ class FPN(ScriptModuleWrapper):
         # This is here for backwards compatability
         padding = 1 if cfg.fpn.pad else 0
         self.pred_layers = nn.ModuleList([
-            nn.Conv2d(cfg.fpn.num_features, cfg.fpn.num_features, kernel_size=3, padding=padding)
+            nn.Conv2d(cfg.fpn.num_features, cfg.fpn.num_features, kernel_size=3, padding=padding, 
+                      groups=cfg.fpn.num_features if cfg.fpn.depthwise else 1)
             for _ in in_channels
         ])
 
         if cfg.fpn.use_conv_downsample:
             self.downsample_layers = nn.ModuleList([
-                nn.Conv2d(cfg.fpn.num_features, cfg.fpn.num_features, kernel_size=3, padding=1, stride=2)
+                nn.Conv2d(cfg.fpn.num_features, cfg.fpn.num_features, kernel_size=3, padding=1, stride=2,
+                          groups=cfg.fpn.num_features if cfg.fpn.depthwise else 1)
                 for _ in range(cfg.fpn.num_downsample)
             ])
         
@@ -400,7 +402,7 @@ class FPN(ScriptModuleWrapper):
         self.lat_layers[2] = trt_fn(self.lat_layers[2], [x])
 
     # TODO: This is commented since the FPN is incompatible with TensorRT.
-    @script_method_wrapper
+    # @script_method_wrapper
     def forward(self, convouts:List[torch.Tensor]):
         """
         Args:

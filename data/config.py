@@ -490,6 +490,10 @@ fpn_base = Config({
 
     # Number of times to stack the NAS-FPN architecture on top of itself.
     'stack_times': 1,
+
+    # If True, will use depthwise convolutions wherever out_channels is evenly 
+    # divisible by in_channels.
+    'depthwise' : False,
 })
 
 
@@ -943,6 +947,17 @@ yolact_mobilenetv2_config = yolact_base_config.copy({
         'use_square_anchors': True, # This is for backward compatability with a bug
     }),
 })
+
+
+yolact_mobilenetv2_depthwise_config = yolact_mobilenetv2_config.copy({
+    'name': 'yolact_mobilenetv2_depthwise',
+
+    'fpn': fpn_base.copy({
+        'use_conv_downsample' : False,
+        'depthwise': True,
+        }),
+})
+
 
 yolact_mobilenetv3_config = yolact_base_config.copy({
     'name': 'yolact_mobilenetv3',

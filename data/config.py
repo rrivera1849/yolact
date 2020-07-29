@@ -175,9 +175,20 @@ pascal_sbd_dataset = dataset_base.copy({
     'class_names': PASCAL_CLASSES,
 })
 
+BDD_CLASSES = ("person", "car", "rider", "bus", "truck",
+               "bike", "motor", "traffic light", "traffic sign")
 
+bdd_dataset = dataset_base.copy({
+    'name': 'Berkeley Deep Drive',
 
+    'train_images': '/work/riverasoto1/yolact/bdd/bdd100k/images/100k/train/',
+    'valid_images': '/work/riverasoto1/yolact/bdd/bdd100k/images/100k/val/',
+    
+    'train_info': '/work/riverasoto1/yolact/bdd/bdd100k/labels_coco/bdd100k_labels_images_train_coco.json',
+    'valid_info': '/work/riverasoto1/yolact/bdd/bdd100k/labels_coco/bdd100k_labels_images_val_coco.json',
 
+    'class_names': BDD_CLASSES,
+})
 
 # ----------------------- TRANSFORMS ----------------------- #
 
@@ -948,6 +959,15 @@ yolact_mobilenetv2_config = yolact_base_config.copy({
     }),
 })
 
+yolact_mobilenetv2_bdd_config = yolact_mobilenetv2_config.copy({
+    'name': 'yolact_mobilenetv2_bdd_config',
+
+    'dataset': bdd_dataset,
+    'num_classes': len(bdd_dataset.class_names) + 1,
+
+    'max_iter': 400000,
+    'lr_steps': (280000, 360000),
+})
 
 yolact_mobilenetv2_depthwise_config = yolact_mobilenetv2_config.copy({
     'name': 'yolact_mobilenetv2_depthwise',

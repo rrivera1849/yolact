@@ -190,6 +190,25 @@ bdd_dataset = dataset_base.copy({
     'class_names': BDD_CLASSES,
 })
 
+CITYSCAPES_CLASSES = ('road', 'sidewalk', 'parking', 'rail track', 'pedestrian',
+                      'rider', 'car', 'truck', 'bus', 'static',
+                      'on rails', 'motorcycle', 'bicycle', 'caravan', 'trailer',
+                      'building', 'wall', 'fence', 'guard rail', 'bridge',
+                      'tunnel', 'pole', 'pole group', 'traffic sign', 'traffic light',
+                      'vegetation', 'terrain', 'sky', 'ground', 'dynamic')
+
+cityscapes_dataset = dataset_base.copy({
+    'name': 'CityScapes',
+
+    'train_images': '/disk1/rafael_data/cityscapes/coco_format/train_images',
+    'valid_images': '/disk1/rafael_data/cityscapes/coco_format/val_images',
+    
+    'train_info': '/disk1/rafael_data/cityscapes/train.json',
+    'valid_info': '/disk1/rafael_data/cityscapes/val.json',
+
+    'class_names': CITYSCAPES_CLASSES,
+})
+
 # ----------------------- TRANSFORMS ----------------------- #
 
 resnet_transform = Config({
@@ -967,6 +986,16 @@ yolact_mobilenetv2_bdd_config = yolact_mobilenetv2_config.copy({
 
     'max_iter': 400000,
     'lr_steps': (280000, 360000),
+})
+
+yolact_mobilenetv2_cityscapes_config = yolact_mobilenetv2_config.copy({
+    'name': 'yolact_mobilenetv2_cityscapes_config',
+
+    'dataset': cityscapes_dataset,
+    'num_classes': len(cityscapes_dataset.class_names) + 1,
+
+    'max_iter': 120000,
+    'lr_steps': (60000, 100000),
 })
 
 yolact_mobilenetv2_depthwise_config = yolact_mobilenetv2_config.copy({

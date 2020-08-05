@@ -374,6 +374,15 @@ mobilenetv2_backbone = backbone_base.copy({
     'type': MobileNetV2Backbone,
     'args': (1.0, mobilenetv2_arch, 8),
     'transform': mobilenetv2_transform,
+
+    'selected_layers': [3, 4, 6],
+    
+    'pred_aspect_ratios': [ [[1, 1/2, 2]] ]*5,
+    'pred_scales': [[24], [48], [96], [192], [384]],
+
+    'use_pixel_scales': True,
+    'preapply_sqrt': False,
+    'use_square_anchors': True,
 })
 
 mobilenetv3_large_arch = [
@@ -880,6 +889,22 @@ yolact_resnet50_nasfpn_config = yolact_resnet50_config.copy({
     }),
 })
 
+yolact_resnet50_cityscapes_config = yolact_resnet50_config.copy({
+    'name': 'yolact_resnet50_cityscapes',
+
+    'dataset': cityscapes_dataset,
+    'num_classes': len(cityscapes_dataset.class_names) + 1,
+
+    'max_iter': 800000,
+
+    'lr' : 1e-2,
+    'lr_steps': (30000, 80000, 150000, 220000, 300000, 380000, 450000),
+
+    'backbone': resnet50_backbone.copy({
+        'use_square_anchors': False,
+    }),
+})
+
 yolact_resnet50_pascal_config = yolact_resnet50_config.copy({
     'name': None, # Will default to yolact_resnet50_pascal
     
@@ -967,35 +992,29 @@ yolact_plus_resnet50_config = yolact_plus_base_config.copy({
 yolact_mobilenetv2_config = yolact_base_config.copy({
     'name': 'yolact_mobilenetv2',
 
-    'backbone': mobilenetv2_backbone.copy({
-        'selected_layers': [3, 4, 6],
-        
-        'pred_scales': yolact_base_config.backbone.pred_scales,
-        'pred_aspect_ratios': yolact_base_config.backbone.pred_aspect_ratios,
-        'use_pixel_scales': True,
-        'preapply_sqrt': False,
-        'use_square_anchors': True, # This is for backward compatability with a bug
-    }),
+    'backbone': mobilenetv2_backbone
 })
 
-yolact_mobilenetv2_bdd_config = yolact_mobilenetv2_config.copy({
-    'name': 'yolact_mobilenetv2_bdd_config',
+# yolact_mobilenetv2_bdd_config = yolact_mobilenetv2_config.copy({
+    # 'name': 'yolact_mobilenetv2_bdd_config',
 
-    'dataset': bdd_dataset,
-    'num_classes': len(bdd_dataset.class_names) + 1,
-
-    'max_iter': 400000,
-    'lr_steps': (280000, 360000),
-})
+    # 'backbone': mobilenetv2_backbone,
+# })
 
 yolact_mobilenetv2_cityscapes_config = yolact_mobilenetv2_config.copy({
-    'name': 'yolact_mobilenetv2_cityscapes_config',
+    'name': 'yolact_mobilenetv2_cityscapes',
 
     'dataset': cityscapes_dataset,
     'num_classes': len(cityscapes_dataset.class_names) + 1,
 
-    'max_iter': 120000,
-    'lr_steps': (60000, 100000),
+    'lr' : 1e-2,
+
+    'max_iter': 800000,
+    'lr_steps': (30000, 80000, 150000, 220000, 300000, 380000, 450000),
+
+    'backbone': mobilenetv2_backbone.copy({
+        'use_square_anchors': False,
+    }),
 })
 
 yolact_mobilenetv2_depthwise_config = yolact_mobilenetv2_config.copy({

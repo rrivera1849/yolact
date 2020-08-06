@@ -190,23 +190,27 @@ bdd_dataset = dataset_base.copy({
     'class_names': BDD_CLASSES,
 })
 
-CITYSCAPES_CLASSES = ('road', 'sidewalk', 'parking', 'rail track', 'pedestrian',
-                      'rider', 'car', 'truck', 'bus', 'static',
-                      'on rails', 'motorcycle', 'bicycle', 'caravan', 'trailer',
-                      'building', 'wall', 'fence', 'guard rail', 'bridge',
-                      'tunnel', 'pole', 'pole group', 'traffic sign', 'traffic light',
-                      'vegetation', 'terrain', 'sky', 'ground', 'dynamic')
+# CITYSCAPES_CLASSES = ('road', 'sidewalk', 'parking', 'rail track', 'pedestrian',
+                      # 'rider', 'car', 'truck', 'bus', 'static',
+                      # 'on rails', 'motorcycle', 'bicycle', 'caravan', 'trailer',
+                      # 'building', 'wall', 'fence', 'guard rail', 'bridge',
+                      # 'tunnel', 'pole', 'pole group', 'traffic sign', 'traffic light',
+                      # 'vegetation', 'terrain', 'sky', 'ground', 'dynamic')
+
+CITYSCAPES_CLASSES = ('car', 'pedestrian', 'truck', 'bus', 'rider')
+CITYSCAPES_LABEL_MAP = { 1: 1, 2: 2, 3: 3, 4: 4, 5: 5}
 
 cityscapes_dataset = dataset_base.copy({
     'name': 'CityScapes',
 
-    'train_images': '/disk1/rafael_data/cityscapes/coco_format/train_images',
-    'valid_images': '/disk1/rafael_data/cityscapes/coco_format/val_images',
+    'train_images': '/home/rafael/data/cityscapes/coco_format/train_images',
+    'valid_images': '/home/rafael/data/cityscapes/coco_format/val_images',
     
-    'train_info': '/disk1/rafael_data/cityscapes/train.json',
-    'valid_info': '/disk1/rafael_data/cityscapes/val.json',
+    'train_info': '/home/rafael/data/cityscapes/train.json',
+    'valid_info': '/home/rafael/data/cityscapes/val.json',
 
     'class_names': CITYSCAPES_CLASSES,
+    'label_map': CITYSCAPES_LABEL_MAP,
 })
 
 # ----------------------- TRANSFORMS ----------------------- #

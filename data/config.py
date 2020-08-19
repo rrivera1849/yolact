@@ -1,6 +1,6 @@
 from backbone import BasicBlock, ResNetBackbone, \
                      VGGBackbone, ResNetBackboneGN, DarkNetBackbone, \
-                     MobileNetV2Backbone, MobileNetV3Backbone
+                     MobileNetV2Backbone, MobileNetV3Backbone, HarDNetBackbone
 
 from math import sqrt
 import torch
@@ -252,6 +252,13 @@ mobilenetv3_transform = Config({
     'to_float': False,
 })
 
+hardnet_transform = Config({
+    'channel_order': 'RGB',
+    'normalize': True,
+    'subtract_means': False,
+    'to_float': False,
+})
+
 # ----------------------- BACKBONES ----------------------- #
 
 backbone_base = Config({
@@ -414,6 +421,22 @@ mobilenetv3_backbone = backbone_base.copy({
     'type': MobileNetV3Backbone,
     'args': (mobilenetv3_large_arch, 1.0),
     'transform': mobilenetv3_transform,
+})
+
+hardnet68_backbone = backbone_base.copy({
+    'name': 'HarDNet68',
+    'path': '',
+    'type': HarDNetBackbone,
+    'args': ('hardnet68',)
+    'transform': hardnet_transform,
+})
+
+hardnet68ds_backbone = backbone_base.copy({
+    'name': 'HarDNet68DS',
+    'path': '',
+    'type': HarDNetBackbone,
+    'args': ('hardnet68ds',)
+    'transform': hardnet_transform,
 })
 
 # ----------------------- MASK BRANCH TYPES ----------------------- #
@@ -1036,6 +1059,34 @@ yolact_mobilenetv3_config = yolact_base_config.copy({
 
     'backbone': mobilenetv3_backbone.copy({
         'selected_layers': [6, 12, 16],
+        
+        'pred_scales': yolact_base_config.backbone.pred_scales,
+        'pred_aspect_ratios': yolact_base_config.backbone.pred_aspect_ratios,
+        'use_pixel_scales': True,
+        'preapply_sqrt': False,
+        'use_square_anchors': True, # This is for backward compatability with a bug
+    }),
+})
+
+yolact_hardnet68_config = yolact_base_config.copy({
+    'name': 'yolact_hardnet68',
+
+    'backbone': hardnet68_backbone.copy({
+        'selected_layers': [5, 10, 13],
+        
+        'pred_scales': yolact_base_config.backbone.pred_scales,
+        'pred_aspect_ratios': yolact_base_config.backbone.pred_aspect_ratios,
+        'use_pixel_scales': True,
+        'preapply_sqrt': False,
+        'use_square_anchors': True, # This is for backward compatability with a bug
+    }),
+})
+
+yolact_hardnet68ds_config = yolact_base_config.copy({
+    'name': 'yolact_hardnet68ds',
+
+    'backbone': hardnet68ds_backbone.copy({
+        'selected_layers': [5, 10, 13],
         
         'pred_scales': yolact_base_config.backbone.pred_scales,
         'pred_aspect_ratios': yolact_base_config.backbone.pred_aspect_ratios,

@@ -860,6 +860,41 @@ class MobileNetV3Backbone(nn.Module):
         self.load_state_dict(state_dict, strict=True)
 
 
+class HarDNetBackbone(nn.Module):
+    def __init__(self, model_name):
+        super(HarDNetBackbone, self).__init__()
+
+        github = 'PingoLH/Pytorch-HarDNet'
+
+        model_list = torch.hub.list(github, model_name)
+        assert model_name in model_list
+
+        self.model = torch.hub.load(github, model_name, pretrained=True)
+        self.model.base = self.model.base[:len(self.model.base) - 1]
+
+        # These modules will be initialized by init_backbone,
+        # so don't overwrite their initialization later.
+        self.backbone_modules = [m for m in self.modules() if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear)]
+
+
+    def forward(self, x):
+        """ Returns a list of convouts for each layer. """
+        outs = []
+
+        for idx, layer in enumerate(self.model.base):
+            x = layer(x)
+            
+            add_to_outputs(self, outs, x, idx, ignore=False)
+        
+        return tuple(outs)
+
+
+    def init_backbone(self, path):
+        """ Initializes the backbone weights for training. """
+        # Weights are being loaded from torch.hub
+        pass
+
+
 def construct_backbone(cfg):
     """ Constructs a backbone given a backbone config object (see config.py). """
     backbone = cfg.type(*cfg.args)
@@ -873,42 +908,42 @@ def construct_backbone(cfg):
     return backbone
 
 
-# Just some quick testing code
-if __name__ == "__main__":
-    mobilenetv3_large_arch = [
-        # k, t, c, SE, HS, s 
-        [3,   1,  16, 0, 0, 1],
-        [3,   4,  24, 0, 0, 2],
-        [3,   3,  24, 0, 0, 1],
-        [5,   3,  40, 1, 0, 2],
-        [5,   3,  40, 1, 0, 1],
-        [5,   3,  40, 1, 0, 1],
-        [3,   6,  80, 0, 1, 2],
-        [3, 2.5,  80, 0, 1, 1],
-        [3, 2.3,  80, 0, 1, 1],
-        [3, 2.3,  80, 0, 1, 1],
-        [3,   6, 112, 1, 1, 1],
-        [3,   6, 112, 1, 1, 1],
-        [5,   6, 160, 1, 1, 2],
-        [5,   6, 160, 1, 1, 1],
-        [5,   6, 160, 1, 1, 1]
-    ]
+# # Just some quick testing code
+# if __name__ == "__main__":
+    # mobilenetv3_large_arch = [
+        # # k, t, c, SE, HS, s 
+        # [3,   1,  16, 0, 0, 1],
+        # [3,   4,  24, 0, 0, 2],
+        # [3,   3,  24, 0, 0, 1],
+        # [5,   3,  40, 1, 0, 2],
+        # [5,   3,  40, 1, 0, 1],
+        # [5,   3,  40, 1, 0, 1],
+        # [3,   6,  80, 0, 1, 2],
+        # [3, 2.5,  80, 0, 1, 1],
+        # [3, 2.3,  80, 0, 1, 1],
+        # [3, 2.3,  80, 0, 1, 1],
+        # [3,   6, 112, 1, 1, 1],
+        # [3,   6, 112, 1, 1, 1],
+        # [5,   6, 160, 1, 1, 2],
+        # [5,   6, 160, 1, 1, 1],
+        # [5,   6, 160, 1, 1, 1]
+    # ]
 
-    print("Loading MobileNetV3")
-    model = MobileNetV3Backbone(mobilenetv3_large_arch)
-    model.init_backbone("./weights/mobilenetv3-large-1cd25616.pth")
+    # print("Loading MobileNetV3")
+    # model = MobileNetV3Backbone(mobilenetv3_large_arch)
+    # model.init_backbone("./weights/mobilenetv3-large-1cd25616.pth")
 
-    mobilenetv2_arch = [
-        # t, c, n, s
-        [1, 16, 1, 1],
-        [6, 24, 2, 2],
-        [6, 32, 3, 2],
-        [6, 64, 4, 2],
-        [6, 96, 3, 1],
-        [6, 160, 3, 2],
-        [6, 320, 1, 1],
-    ]
+    # mobilenetv2_arch = [
+        # # t, c, n, s
+        # [1, 16, 1, 1],
+        # [6, 24, 2, 2],
+        # [6, 32, 3, 2],
+        # [6, 64, 4, 2],
+        # [6, 96, 3, 1],
+        # [6, 160, 3, 2],
+        # [6, 320, 1, 1],
+    # ]
 
-    print("Loading MobileNetV2")
-    model = MobileNetV2Backbone(1.0, mobilenetv2_arch, 8)
-    model.init_backbone("./weights/mobilenet_v2-b0353104.pth")
+    # print("Loading MobileNetV2")
+    # model = MobileNetV2Backbone(1.0, mobilenetv2_arch, 8)
+    # model.init_backbone("./weights/mobilenet_v2-b0353104.pth")

@@ -872,6 +872,8 @@ class HarDNetBackbone(nn.Module):
         self.model = torch.hub.load(github, model_name, pretrained=True)
         self.model.base = self.model.base[:len(self.model.base) - 1]
 
+        self.channels = [32, 64, 64, 124, 128, 128, 262, 256, 328, 320, 320, 654, 640, 640, 782, 1024]
+
         # These modules will be initialized by init_backbone,
         # so don't overwrite their initialization later.
         self.backbone_modules = [m for m in self.modules() if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear)]
@@ -894,6 +896,9 @@ class HarDNetBackbone(nn.Module):
         # Weights are being loaded from torch.hub
         pass
 
+    def add_layer(self):
+        pass
+
 
 def construct_backbone(cfg):
     """ Constructs a backbone given a backbone config object (see config.py). """
@@ -902,11 +907,14 @@ def construct_backbone(cfg):
     # Add downsampling layers until we reach the number we need
     num_layers = max(cfg.selected_layers) + 1
 
-    while len(backbone.layers) < num_layers:
-        backbone.add_layer()
+    if isinstance(backbone, HarDNetBackbone):
+        while len(backbone.model.base) < num_layers:
+            backbone.add_layer()
+    else:
+        while len(backbone.layers) < num_layers:
+            backbone.add_layer()
 
     return backbone
-
 
 # # Just some quick testing code
 # if __name__ == "__main__":

@@ -2,7 +2,7 @@ import torch, torchvision
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.models.resnet import Bottleneck
-# from torch2trt import torch2trt
+from torch2trt import torch2trt
 import numpy as np
 from copy import deepcopy
 from functools import partial
@@ -26,13 +26,14 @@ from utils.functions import MovingAverage, make_net
 torch.cuda.current_device()
 
 # As of March 10, 2019, Pytorch DataParallel still doesn't support JIT Script Modules
-use_jit = torch.cuda.device_count() <= 1
+# TODO: Incompatible with torch2trt, will have to find a workaround. 
+use_jit = False
+# use_jit = torch.cuda.device_count() <= 1
+
 if not use_jit:
     print('Multiple GPUs detected! Turning off JIT.')
 
-# TODO: Incompatible with torch2trt, will have to find a workaround. 
-# ScriptModuleWrapper = torch.jit.ScriptModule if use_jit else nn.Module
-ScriptModuleWrapper = nn.Module
+ScriptModuleWrapper = torch.jit.ScriptModule if use_jit else nn.Module
 script_method_wrapper = torch.jit.script_method if use_jit else lambda fn, _rcn=None: fn
 
 
@@ -137,53 +138,54 @@ class PredictionModule(nn.Module):
         self.last_img_size = None
 
 
-    # def to_tensorrt(self, int8_mode=False):
-        # """Converts the bbox, conf, and mask layer of the PredictionModule 
-           # into TRTModules.
-        # """
+    def to_tensorrt(self, int8_mode=False):
+        """Converts the bbox, conf, and mask layer of the PredictionModule 
+           into TRTModules.
+        """
 
-        # # Each PredictionModule takes a particular input shape. 
-        # # Torch2TRT optimizes based on the input shape so we need to 
-        # # make sure that we feed it the same shape that it will receive 
-        # # during testing phase.
-        # input_sizes = [
-                # (1, 256, 69, 69),
-                # (1, 256, 35, 35),
-                # (1, 256, 18, 18),
-                # (1, 256, 9, 9),
-                # (1, 256, 5, 5),
-                # ]
+        # Each PredictionModule takes a particular input shape. 
+        # Torch2TRT optimizes based on the input shape so we need to 
+        # make sure that we feed it the same shape that it will receive 
+        # during testing phase.
+        input_sizes = [
+                (1, 256, 69, 69),
+                (1, 256, 35, 35),
+                (1, 256, 18, 18),
+                (1, 256, 9, 9),
+                (1, 256, 5, 5),
+                ]
 
-        # x = torch.ones(input_sizes[self.index]).cuda()
+        x = torch.ones(input_sizes[self.index]).cuda()
 
-        # if int8_mode:
-            # trt_fn = partial(torch2trt, int8_mode=True, strict_type_constraints=True)
-        # else:
-            # trt_fn = partial(torch2trt, fp16_mode=True, strict_type_constraints=True)
+        if int8_mode:
+            trt_fn = partial(torch2trt, int8_mode=True, strict_type_constraints=True)
+        else:
+            trt_fn = partial(torch2trt, fp16_mode=True, strict_type_constraints=True)
 
-        # if self.index == 0 and cfg.share_prediction_module:
-            # self.bbox_layer_old = self.bbox_layer
-            # self.conf_layer_old = self.conf_layer
-            # self.mask_layer_old = self.mask_layer
+        if self.index == 0 and cfg.share_prediction_module:
+            self.upfeature_old  = self.upfeature
+            self.bbox_layer_old = self.bbox_layer
+            self.conf_layer_old = self.conf_layer
+            self.mask_layer_old = self.mask_layer
+            
+            self.upfeature  = trt_fn(self.upfeature, [x])
+            self.bbox_layer = trt_fn(self.bbox_layer, [x])
+            self.conf_layer = trt_fn(self.conf_layer, [x])
+            self.mask_layer = trt_fn(self.mask_layer, [x])
+        elif self.index > 0 and self.parent is not None and cfg.share_prediction_module:
+            self.bbox_extra = self.parent[0].bbox_extra
+            self.conf_extra = self.parent[0].conf_extra
+            self.mask_extra = self.parent[0].mask_extra
 
-            # self.bbox_layer = trt_fn(self.bbox_layer, [x])
-            # self.conf_layer = trt_fn(self.conf_layer, [x])
-            # self.mask_layer = trt_fn(self.mask_layer, [x])
-        # elif self.index > 0 and self.parent is not None and cfg.share_prediction_module:
-            # self.upfeature = deepcopy(self.parent[0].upfeature)
+            self.upfeature  = trt_fn(self.parent[0].upfeature_old, [x])
+            self.bbox_layer = trt_fn(self.parent[0].bbox_layer_old, [x])
+            self.conf_layer = trt_fn(self.parent[0].conf_layer_old, [x])
+            self.mask_layer = trt_fn(self.parent[0].mask_layer_old, [x])
 
-            # self.bbox_extra = self.parent[0].bbox_extra
-            # self.conf_extra = self.parent[0].conf_extra
-            # self.mask_extra = self.parent[0].mask_extra
-
-            # self.bbox_layer = trt_fn(self.parent[0].bbox_layer_old, [x])
-            # self.conf_layer = trt_fn(self.parent[0].conf_layer_old, [x])
-            # self.mask_layer = trt_fn(self.parent[0].mask_layer_old, [x])
-
-            # self.parent = [None]
-        # else:
-            # raise NotImplementedError("to_tensorrt doesn't currently work when we're not"
-                                      # "sharing the prediction module")
+            self.parent = [None]
+        else:
+            raise NotImplementedError("to_tensorrt doesn't currently work when we're not"
+                                      "sharing the prediction module")
 
 
     def forward(self, x):
@@ -787,7 +789,7 @@ class Yolact(nn.Module):
         if cfg.fpn is not None:
             with timer.env('fpn'):
                 # Use backbone.selected_layers because we overwrote self.selected_layers
-                # outs = [outs[i] for i in cfg.backbone.selected_layers]
+                outs = [outs[i] for i in cfg.backbone.selected_layers]
 
                 outs = self.fpn(outs)
 
@@ -892,28 +894,28 @@ class Yolact(nn.Module):
             return self.detect(pred_outs, self)
 
 
-    # def to_tensorrt_backbone(self, int8_mode=False, calibration_dataset=None):
-        # """Converts the Backbone to a TRTModule.
-        # """
-        # if int8_mode:
-            # trt_fn = partial(torch2trt, int8_mode=True, int8_calib_dataset=calibration_dataset, strict_type_constraints=True)
-        # else:
-            # trt_fn = partial(torch2trt, fp16_mode=True, strict_type_constraints=True)
+    def to_tensorrt_backbone(self, int8_mode=False, calibration_dataset=None):
+        """Converts the Backbone to a TRTModule.
+        """
+        if int8_mode:
+            trt_fn = partial(torch2trt, int8_mode=True, int8_calib_dataset=calibration_dataset, strict_type_constraints=True)
+        else:
+            trt_fn = partial(torch2trt, fp16_mode=True, strict_type_constraints=True)
 
-        # x = torch.ones((1, 3, cfg.max_size, cfg.max_size)).cuda()
-        # self.backbone = trt_fn(self.backbone, [x])
+        x = torch.ones((1, 3, cfg.max_size, cfg.max_size)).cuda()
+        self.backbone = trt_fn(self.backbone, [x])
 
 
-    # def to_tensorrt_protonet(self, int8_mode=False):
-        # """Converts ProtoNet to a TRTModule.
-        # """
-        # if int8_mode:
-            # trt_fn = partial(torch2trt, int8_mode=True, strict_type_constraints=True)
-        # else:
-            # trt_fn = partial(torch2trt, fp16_mode=True, strict_type_constraints=True)
+    def to_tensorrt_protonet(self, int8_mode=False):
+        """Converts ProtoNet to a TRTModule.
+        """
+        if int8_mode:
+            trt_fn = partial(torch2trt, int8_mode=True, strict_type_constraints=True)
+        else:
+            trt_fn = partial(torch2trt, fp16_mode=True, strict_type_constraints=True)
 
-        # x = torch.ones((1, 256, 69, 69)).cuda()
-        # self.proto_net = trt_fn(self.proto_net, [x])
+        x = torch.ones((1, 256, 69, 69)).cuda()
+        self.proto_net = trt_fn(self.proto_net, [x])
 
 
 # # Some testing code

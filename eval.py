@@ -180,11 +180,12 @@ def prep_display(dets_out, img, h, w, undo_transform=True, class_color=False, ma
         
         if cfg.eval_mask_branch:
             # Masks are drawn on the GPU, so don't copy
-            masks = t[3][idx]
+            masks = torch.index_select(t[3], 0, idx)
 
-        classes, scores, boxes = [x[idx].cpu().numpy() for x in t[:3]]
+        classes, scores, boxes = [torch.index_select(x, 0, idx).cpu().numpy() for x in t[:3]]
 
     num_dets_to_consider = min(args.top_k, classes.shape[0])
+
     for j in range(num_dets_to_consider):
         if scores[j] < args.score_threshold:
             num_dets_to_consider = j
@@ -620,6 +621,7 @@ def badhash(x):
 def evalimage(net:Yolact, path:str, save_path:str=None):
     frame = torch.from_numpy(cv2.imread(path)).cuda().float()
     batch = FastBaseTransform()(frame.unsqueeze(0))
+    import pdb; pdb.set_trace() 
     preds = net(batch)
 
     img_numpy = prep_display(preds, frame, None, None, undo_transform=False)

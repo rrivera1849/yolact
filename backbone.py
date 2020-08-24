@@ -211,7 +211,7 @@ class ResNetBackbone(nn.Module):
         for i, layer in enumerate(self.layers):
             x = layer(x)
 
-            add_to_outputs(self, outs, x, i, ignore=False)
+            add_to_outputs(self, outs, x, i, ignore=True)
 
         return tuple(outs)
 
@@ -382,7 +382,7 @@ class DarkNetBackbone(nn.Module):
         for i, layer in enumerate(self.layers):
             x = layer(x)
 
-            add_to_outputs(self, outs, x, i, ignore=False)
+            add_to_outputs(self, outs, x, i, ignore=True)
 
         return tuple(outs)
 
@@ -487,7 +487,7 @@ class VGGBackbone(nn.Module):
             if idx in self.norm_lookup:
                 x = self.norms[self.norm_lookup[idx]](x)
 
-            add_to_outputs(self, outs, x, idx, ignore=False)
+            add_to_outputs(self, outs, x, idx, ignore=True)
         
         return tuple(outs)
 
@@ -762,7 +762,7 @@ class MobileNetV2Backbone(nn.Module):
         for idx, layer in enumerate(self.layers):
             x = layer(x)
             
-            add_to_outputs(self, outs, x, idx, ignore=False)
+            add_to_outputs(self, outs, x, idx, ignore=True)
         
         return tuple(outs)
 
@@ -824,7 +824,7 @@ class MobileNetV3Backbone(nn.Module):
         for idx, layer in enumerate(self.layers):
             x = layer(x)
             
-            add_to_outputs(self, outs, x, idx, ignore=False)
+            add_to_outputs(self, outs, x, idx, ignore=True)
         
         return tuple(outs)
 

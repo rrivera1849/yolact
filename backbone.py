@@ -886,7 +886,7 @@ class HarDNetBackbone(nn.Module):
         for idx, layer in enumerate(self.model.base):
             x = layer(x)
             
-            add_to_outputs(self, outs, x, idx, ignore=False)
+            add_to_outputs(self, outs, x, idx, ignore=True)
         
         return tuple(outs)
 

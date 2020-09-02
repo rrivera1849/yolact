@@ -548,23 +548,25 @@ class NASFPN(nn.Module):
         p3, p4, p5, p6, p7 = feats
 
         for stage in self.fpn_stages:
-            p4_1 = stage['gp_64_4'](p6, p4, p4.shape[-2:])
+            # We convert to Tensor here because of some TensorRT nonsense 
+            # where every input must have a .clone()
+            p4_1 = stage['gp_64_4'](p6, p4, torch.tensor(p4.shape[-2:]))
 
-            p4_2 = stage['sum_44_4'](p4_1, p4, p4.shape[-2:])
+            p4_2 = stage['sum_44_4'](p4_1, p4, torch.tensor(p4.shape[-2:]))
 
-            p3 = stage['sum_43_3'](p4_2, p3, p3.shape[-2:])
+            p3 = stage['sum_43_3'](p4_2, p3, torch.tensor(p3.shape[-2:]))
 
-            p4 = stage['sum_34_4'](p3, p4_2, p4.shape[-2:])
+            p4 = stage['sum_34_4'](p3, p4_2, torch.tensor(p4.shape[-2:]))
 
-            p5_tmp = stage['gp_43_5'](p4, p3, p5.shape[-2:])
+            p5_tmp = stage['gp_43_5'](p4, p3, torch.tensor(p5.shape[-2:]))
 
-            p5 = stage['sum_55_5'](p5, p5_tmp, p5.shape[-2:])
+            p5 = stage['sum_55_5'](p5, p5_tmp, torch.tensor(p5.shape[-2:]))
 
-            p7_tmp = stage['gp_54_7'](p5, p4_2, p7.shape[-2:])
+            p7_tmp = stage['gp_54_7'](p5, p4_2, torch.tensor(p7.shape[-2:]))
 
-            p7 = stage['sum_77_7'](p7, p7_tmp, p7.shape[-2:])
+            p7 = stage['sum_77_7'](p7, p7_tmp, torch.tensor(p7.shape[-2:]))
 
-            p6 = stage['gp_75_6'](p7, p5, p6.shape[-2:])
+            p6 = stage['gp_75_6'](p7, p5, torch.tensor(p6.shape[-2:]))
 
         return p3, p4, p5, p6, p7
 
@@ -963,23 +965,55 @@ class Yolact(nn.Module):
     # except KeyboardInterrupt:
         # pass
 
-# # Testing code for NAS FPN
-# if __name__ == '__main__':
-    # cfg.fpn.use_conv_downsample = True
-    # cfg.fpn.num_downsample = 2
-    # cfg.fpn.num_features = 256
-    # cfg.fpn.stack_times = 2
+intermediate_inputs = []
 
-    # in_channels = [256, 512, 1024]
+def forward_hook(self, inputs, outputs):
 
-    # convouts = [
-            # torch.randn(1, 256, 64, 64),
-            # torch.randn(1, 512, 32, 32),
-            # torch.randn(1, 1024, 16, 16),
-            # ]
+    intermediate_inputs.append(inputs)
 
-    # fpn = NASFPN(in_channels)
-    # outs = fpn(convouts)
+# Testing code for NAS FPN
+if __name__ == '__main__':
+    cfg.fpn.use_conv_downsample = True
+    cfg.fpn.num_downsample = 2
+    cfg.fpn.num_features = 256
+    cfg.fpn.stack_times = 1
 
-    # for out in outs:
-        # print(out.size())
+    in_channels = [256, 512, 1024]
+
+    convouts = [
+            torch.randn(1, 256, 69, 69).cuda(),
+            torch.randn(1, 512, 35, 35).cuda(),
+            torch.randn(1, 1024, 18, 18).cuda(),
+            ]
+
+    fpn = NASFPN(in_channels).cuda()
+
+    for m in fpn.lat_layers:
+        m.register_forward_hook(forward_hook)
+
+    for m in fpn.downsample_layers:
+        m.register_forward_hook(forward_hook)
+
+    for stage in fpn.fpn_stages:
+        for name, m in stage.items():
+            m.register_forward_hook(forward_hook)
+
+    outs = fpn(convouts)
+
+    int_index = 0
+
+    for i in range(len(fpn.lat_layers)):
+        fpn.lat_layers[i] = torch2trt(fpn.lat_layers[i], intermediate_inputs[int_index])
+        int_index += 1
+
+    for i in range(len(fpn.downsample_layers)):
+        fpn.downsample_layers[i] = torch2trt(fpn.downsample_layers[i], intermediate_inputs[int_index])
+        int_index += 1
+
+    for stage in fpn.fpn_stages:
+        for name, m in stage.items():
+            stage[name] = torch2trt(m, intermediate_inputs[int_index])
+            int_index += 1
+
+    for out in outs:
+        print(out.size())

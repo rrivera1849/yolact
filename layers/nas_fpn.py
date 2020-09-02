@@ -43,7 +43,8 @@ class SumCell(nn.Module):
             )
 
     def forward(self, x1, x2, resize_size):
-
+        
+        resize_size = torch.Size((size.item() for size in resize_size))
         x1 = resize(x1, resize_size, self.upsample_mode)
         x2 = resize(x2, resize_size, self.upsample_mode)
 
@@ -71,6 +72,7 @@ class GlobalPoolingCell(nn.Module):
 
     def forward(self, x1, x2, resize_size):
 
+        resize_size = torch.Size((size.item() for size in resize_size))
         x1 = resize(x1, resize_size, self.upsample_mode)
         x2 = resize(x2, resize_size, self.upsample_mode)
 

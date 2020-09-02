@@ -427,7 +427,7 @@ hardnet68_backbone = backbone_base.copy({
     'name': 'HarDNet68',
     'path': '',
     'type': HarDNetBackbone,
-    'args': ('hardnet68',)
+    'args': ('hardnet68',),
     'transform': hardnet_transform,
 })
 
@@ -435,7 +435,7 @@ hardnet68ds_backbone = backbone_base.copy({
     'name': 'HarDNet68DS',
     'path': '',
     'type': HarDNetBackbone,
-    'args': ('hardnet68ds',)
+    'args': ('hardnet68ds',),
     'transform': hardnet_transform,
 })
 
@@ -906,7 +906,7 @@ yolact_resnet50_config = yolact_base_config.copy({
 })
 
 yolact_resnet50_nasfpn_config = yolact_resnet50_config.copy({
-    'name': 'yolact_resnet50_nasfpn_config', 
+    'name': 'yolact_resnet50_nasfpn', 
 
     # FPN Settings
     'fpn': fpn_base.copy({
@@ -1097,7 +1097,7 @@ yolact_hardnet68ds_config = yolact_base_config.copy({
 })
 
 yolact_mobilenetv2_nasfpn_config = yolact_mobilenetv2_config.copy({
-    'name': 'yolact_mobilenetv2_nasfpn_config', 
+    'name': 'yolact_mobilenetv2_nasfpn', 
 
     # FPN Settings
     'fpn': fpn_base.copy({
@@ -1108,7 +1108,7 @@ yolact_mobilenetv2_nasfpn_config = yolact_mobilenetv2_config.copy({
 })
 
 yolact_mobilenetv3_nasfpn_config = yolact_mobilenetv3_config.copy({
-    'name': 'yolact_mobilenetv3_nasfpn_config', 
+    'name': 'yolact_mobilenetv3_nasfpn', 
 
     # FPN Settings
     'fpn': fpn_base.copy({

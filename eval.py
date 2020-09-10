@@ -1135,6 +1135,8 @@ if __name__ == '__main__':
         net.eval()
 
         calibration_dataset = None
+        calibration_protonet_dataset = None
+
         if args.torch2trt_backbone_int8:
             print('Calibrating with {} images...'.format(args.torch2trt_max_calibration_images))
             dataset_indices = list(range(args.torch2trt_max_calibration_images))
@@ -1142,18 +1144,55 @@ if __name__ == '__main__':
             calibration_dataset = [dataset.pull_item(image_idx)[0] for image_idx in dataset_indices]
             calibration_dataset = torch.stack(calibration_dataset)
 
+            if args.cuda:
+                calibration_dataset = calibration_dataset.cuda()
+    
+        if args.torch2trt_protonet_int8:
+            calibration_protonet_dataset = []
+
+            def forward_hook(self, inputs, outputs):
+                calibration_protonet_dataset.append(inputs)
+
+            handle = net.proto_net.register_forward_hook(forward_hook)
+            net(calibration_dataset)
+            handle.remove()
+
+            calibration_protonet_dataset = calibration_protonet_dataset[0][0]
+
+        if args.torch2trt_prediction_module_int8:
+            if not cfg.share_prediction_module:
+                raise ValueError("INT8 Prediction Module not supported without shared heads.")
+
+            calibration_ph_dataset = []
+
+            def forward_hook(self, inputs, outputs):
+                calibration_ph_dataset.append(inputs)
+
+            handle_1 = net.prediction_layers[0].upfeature.register_forward_hook(forward_hook)
+            handle_2 = net.prediction_layers[0].bbox_layer.register_forward_hook(forward_hook)
+            handle_3 = net.prediction_layers[0].conf_layer.register_forward_hook(forward_hook)
+            handle_4 = net.prediction_layers[0].mask_layer.register_forward_hook(forward_hook)
+
+            net(calibration_dataset)
+            calibration_ph_dataset = [x[0] for x in calibration_ph_dataset]
+
+            handle_1.remove()
+            handle_2.remove()
+            handle_3.remove()
+            handle_4.remove()
+
         if args.torch2trt_backbone or args.torch2trt_backbone_int8:
             net.to_tensorrt_backbone(args.torch2trt_backbone_int8, calibration_dataset=calibration_dataset)
 
         if args.torch2trt_protonet or args.torch2trt_protonet_int8:
-            net.to_tensorrt_protonet(args.torch2trt_protonet_int8)
+            net.to_tensorrt_protonet(args.torch2trt_protonet_int8, calibration_dataset=calibration_protonet_dataset)
             
         if args.torch2trt_fpn or args.torch2trt_fpn_int8:
             net.fpn.to_tensorrt(args.torch2trt_fpn_int8)
 
         if args.torch2trt_prediction_module or args.torch2trt_prediction_module_int8:
             for prediction_layer in net.prediction_layers:
-                prediction_layer.to_tensorrt(args.torch2trt_prediction_module_int8)
+                prediction_layer.to_tensorrt(args.torch2trt_prediction_module_int8, calibration_dataset=calibration_ph_dataset)
 
         print(' Done.')
 

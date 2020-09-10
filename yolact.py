@@ -138,7 +138,7 @@ class PredictionModule(nn.Module):
         self.last_img_size = None
 
 
-    def to_tensorrt(self, int8_mode=False):
+    def to_tensorrt(self, int8_mode=False, calibration_dataset=None):
         """Converts the bbox, conf, and mask layer of the PredictionModule 
            into TRTModules.
         """
@@ -157,6 +157,12 @@ class PredictionModule(nn.Module):
 
         x = torch.ones(input_sizes[self.index]).cuda()
 
+        if calibration_dataset:
+            start = self.index * 4
+            end = start + 4 
+
+            head_calibration_dataset = calibration_dataset[start:end]
+
         if int8_mode:
             trt_fn = partial(torch2trt, int8_mode=True, strict_type_constraints=True)
         else:
@@ -168,19 +174,27 @@ class PredictionModule(nn.Module):
             self.conf_layer_old = self.conf_layer
             self.mask_layer_old = self.mask_layer
             
-            self.upfeature  = trt_fn(self.upfeature, [x])
-            self.bbox_layer = trt_fn(self.bbox_layer, [x])
-            self.conf_layer = trt_fn(self.conf_layer, [x])
-            self.mask_layer = trt_fn(self.mask_layer, [x])
+            self.upfeature  = trt_fn(self.upfeature, [x], 
+                                     int8_calib_dataset=head_calibration_dataset[0])
+            self.bbox_layer = trt_fn(self.bbox_layer, [x], 
+                                     int8_calib_dataset=head_calibration_dataset[1])
+            self.conf_layer = trt_fn(self.conf_layer, [x], 
+                                     int8_calib_dataset=head_calibration_dataset[2])
+            self.mask_layer = trt_fn(self.mask_layer, [x], 
+                                     int8_calib_dataset=head_calibration_dataset[3])
         elif self.index > 0 and self.parent is not None and cfg.share_prediction_module:
             self.bbox_extra = self.parent[0].bbox_extra
             self.conf_extra = self.parent[0].conf_extra
             self.mask_extra = self.parent[0].mask_extra
 
-            self.upfeature  = trt_fn(self.parent[0].upfeature_old, [x])
-            self.bbox_layer = trt_fn(self.parent[0].bbox_layer_old, [x])
-            self.conf_layer = trt_fn(self.parent[0].conf_layer_old, [x])
-            self.mask_layer = trt_fn(self.parent[0].mask_layer_old, [x])
+            self.upfeature  = trt_fn(self.parent[0].upfeature_old, [x], 
+                                     int8_calib_dataset=head_calibration_dataset[0])
+            self.bbox_layer = trt_fn(self.parent[0].bbox_layer_old, [x], 
+                                     int8_calib_dataset=head_calibration_dataset[1])
+            self.conf_layer = trt_fn(self.parent[0].conf_layer_old, [x], 
+                                     int8_calib_dataset=head_calibration_dataset[2])
+            self.mask_layer = trt_fn(self.parent[0].mask_layer_old, [x], 
+                                     int8_calib_dataset=head_calibration_dataset[3])
 
             self.parent = [None]
         else:
@@ -547,26 +561,33 @@ class NASFPN(nn.Module):
 
         p3, p4, p5, p6, p7 = feats
 
+        def size_to_tensor(tensor):
+            """Quick helper function for converting the Size to a 
+               torch.Tensor that is accepted by TensorRT.
+            """
+            out = torch.tensor([tensor.shape[-2:][0], tensor.shape[-2:][1]]).type(torch.int8)
+            return out
+
         for stage in self.fpn_stages:
             # We convert to Tensor here because of some TensorRT nonsense 
             # where every input must have a .clone()
-            p4_1 = stage['gp_64_4'](p6, p4, torch.tensor(p4.shape[-2:]))
+            p4_1 = stage['gp_64_4'](p6, p4, size_to_tensor(p4))
 
-            p4_2 = stage['sum_44_4'](p4_1, p4, torch.tensor(p4.shape[-2:]))
+            p4_2 = stage['sum_44_4'](p4_1, p4, size_to_tensor(p4))
 
-            p3 = stage['sum_43_3'](p4_2, p3, torch.tensor(p3.shape[-2:]))
+            p3 = stage['sum_43_3'](p4_2, p3, size_to_tensor(p3))
 
-            p4 = stage['sum_34_4'](p3, p4_2, torch.tensor(p4.shape[-2:]))
+            p4 = stage['sum_34_4'](p3, p4_2, size_to_tensor(p4))
 
-            p5_tmp = stage['gp_43_5'](p4, p3, torch.tensor(p5.shape[-2:]))
+            p5_tmp = stage['gp_43_5'](p4, p3, size_to_tensor(p5))
 
-            p5 = stage['sum_55_5'](p5, p5_tmp, torch.tensor(p5.shape[-2:]))
+            p5 = stage['sum_55_5'](p5, p5_tmp, size_to_tensor(p5))
 
-            p7_tmp = stage['gp_54_7'](p5, p4_2, torch.tensor(p7.shape[-2:]))
+            p7_tmp = stage['gp_54_7'](p5, p4_2, size_to_tensor(p7))
 
-            p7 = stage['sum_77_7'](p7, p7_tmp, torch.tensor(p7.shape[-2:]))
+            p7 = stage['sum_77_7'](p7, p7_tmp, size_to_tensor(p7))
 
-            p6 = stage['gp_75_6'](p7, p5, torch.tensor(p6.shape[-2:]))
+            p6 = stage['gp_75_6'](p7, p5, size_to_tensor(p6))
 
         return p3, p4, p5, p6, p7
 
@@ -904,15 +925,16 @@ class Yolact(nn.Module):
         else:
             trt_fn = partial(torch2trt, fp16_mode=True, strict_type_constraints=True)
 
+
         x = torch.ones((1, 3, cfg.max_size, cfg.max_size)).cuda()
         self.backbone = trt_fn(self.backbone, [x])
 
 
-    def to_tensorrt_protonet(self, int8_mode=False):
+    def to_tensorrt_protonet(self, int8_mode=False, calibration_dataset=None):
         """Converts ProtoNet to a TRTModule.
         """
         if int8_mode:
-            trt_fn = partial(torch2trt, int8_mode=True, strict_type_constraints=True)
+            trt_fn = partial(torch2trt, int8_mode=True, int8_calib_dataset=calibration_dataset, strict_type_constraints=True)
         else:
             trt_fn = partial(torch2trt, fp16_mode=True, strict_type_constraints=True)
 
@@ -965,55 +987,58 @@ class Yolact(nn.Module):
     # except KeyboardInterrupt:
         # pass
 
-intermediate_inputs = []
 
-def forward_hook(self, inputs, outputs):
+# intermediate_inputs = []
 
-    intermediate_inputs.append(inputs)
+# def forward_hook(self, inputs, outputs):
+    # intermediate_inputs.append(list(inputs))
 
-# Testing code for NAS FPN
-if __name__ == '__main__':
-    cfg.fpn.use_conv_downsample = True
-    cfg.fpn.num_downsample = 2
-    cfg.fpn.num_features = 256
-    cfg.fpn.stack_times = 1
+# # Testing code for NAS FPN
+# if __name__ == '__main__':
+    # cfg.fpn.use_conv_downsample = True
+    # cfg.fpn.num_downsample = 2
+    # cfg.fpn.num_features = 256
+    # cfg.fpn.stack_times = 1
 
-    in_channels = [256, 512, 1024]
+    # in_channels = [256, 512, 1024]
 
-    convouts = [
-            torch.randn(1, 256, 69, 69).cuda(),
-            torch.randn(1, 512, 35, 35).cuda(),
-            torch.randn(1, 1024, 18, 18).cuda(),
-            ]
+    # convouts = [
+            # torch.randn(1, 256, 69, 69).cuda(),
+            # torch.randn(1, 512, 35, 35).cuda(),
+            # torch.randn(1, 1024, 18, 18).cuda(),
+            # ]
 
-    fpn = NASFPN(in_channels).cuda()
+    # fpn = NASFPN(in_channels).cuda()
+    # fpn.eval()
 
-    for m in fpn.lat_layers:
-        m.register_forward_hook(forward_hook)
+    # for m in fpn.lat_layers:
+        # m.register_forward_hook(forward_hook)
 
-    for m in fpn.downsample_layers:
-        m.register_forward_hook(forward_hook)
+    # for m in fpn.downsample_layers:
+        # m.register_forward_hook(forward_hook)
 
-    for stage in fpn.fpn_stages:
-        for name, m in stage.items():
-            m.register_forward_hook(forward_hook)
+    # for stage in fpn.fpn_stages:
+        # for name, m in stage.items():
+            # m.register_forward_hook(forward_hook)
 
-    outs = fpn(convouts)
+    # # for stage in fpn.fpn_stages:
+        # # for name, m in stage.items():
+            # # print(name, m.branch_1, m.branch_2)
 
-    int_index = 0
+    # outs = fpn(convouts)
+    # for out in outs:
+        # print(out.size())
 
-    for i in range(len(fpn.lat_layers)):
-        fpn.lat_layers[i] = torch2trt(fpn.lat_layers[i], intermediate_inputs[int_index])
-        int_index += 1
+    # int_index = 0
 
-    for i in range(len(fpn.downsample_layers)):
-        fpn.downsample_layers[i] = torch2trt(fpn.downsample_layers[i], intermediate_inputs[int_index])
-        int_index += 1
+    # for i in range(len(fpn.lat_layers)):
+        # fpn.lat_layers[i] = torch2trt(fpn.lat_layers[i], intermediate_inputs[int_index])
+        # int_index += 1
 
-    for stage in fpn.fpn_stages:
-        for name, m in stage.items():
-            stage[name] = torch2trt(m, intermediate_inputs[int_index])
-            int_index += 1
+    # for i in range(len(fpn.downsample_layers)):
+        # fpn.downsample_layers[i] = torch2trt(fpn.downsample_layers[i], intermediate_inputs[int_index])
+        # int_index += 1
 
-    for out in outs:
-        print(out.size())
+    # outs = fpn(convouts)
+    # for out in outs:
+        # print(out.size())

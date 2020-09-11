@@ -162,6 +162,8 @@ class PredictionModule(nn.Module):
             end = start + 4 
 
             head_calibration_dataset = calibration_dataset[start:end]
+        else:
+            head_calibration_dataset = [None for _ in range(4)]
 
         if int8_mode:
             trt_fn = partial(torch2trt, int8_mode=True, strict_type_constraints=True)

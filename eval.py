@@ -1136,6 +1136,7 @@ if __name__ == '__main__':
 
         calibration_dataset = None
         calibration_protonet_dataset = None
+        calibration_ph_dataset = None
 
         if args.torch2trt_backbone_int8:
             print('Calibrating with {} images...'.format(args.torch2trt_max_calibration_images))

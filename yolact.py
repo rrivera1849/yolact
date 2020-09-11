@@ -421,13 +421,17 @@ class FPN(ScriptModuleWrapper):
 
     # TODO: This is commented since the FPN is incompatible with TensorRT.
     # @script_method_wrapper
-    def forward(self, convouts:List[torch.Tensor]):
+    # def forward(self, convouts:List[torch.Tensor]):
+    def forward(self, x1=None, x2=None, x3=None, x4=None,
+                      x5=None, x6=None, x7=None):
         """
         Args:
             - convouts (list): A list of convouts for the corresponding layers in in_channels.
         Returns:
             - A list of FPN convouts in the same order as x with extra downsample layers if requested.
         """
+        convouts = [x1, x2, x3, x4, x5, x6, x7]
+        convouts = [x for x in convouts if x is not None]
 
         out = []
         x = torch.zeros(1, device=convouts[0].device)
@@ -816,7 +820,8 @@ class Yolact(nn.Module):
                 # Use backbone.selected_layers because we overwrote self.selected_layers
                 outs = [outs[i] for i in cfg.backbone.selected_layers]
 
-                outs = self.fpn(outs)
+                # outs = self.fpn(outs)
+                outs = self.fpn(*outs)
 
         proto_out = None
         if cfg.mask_type == mask_type.lincomb and cfg.eval_mask_branch:
@@ -923,7 +928,9 @@ class Yolact(nn.Module):
         """Converts the Backbone to a TRTModule.
         """
         if int8_mode:
-            trt_fn = partial(torch2trt, int8_mode=True, int8_calib_dataset=calibration_dataset, strict_type_constraints=True)
+            trt_fn = partial(torch2trt, int8_mode=True, 
+                             int8_calib_dataset=calibration_dataset, 
+                             strict_type_constraints=True)
         else:
             trt_fn = partial(torch2trt, fp16_mode=True, strict_type_constraints=True)
 
@@ -936,12 +943,30 @@ class Yolact(nn.Module):
         """Converts ProtoNet to a TRTModule.
         """
         if int8_mode:
-            trt_fn = partial(torch2trt, int8_mode=True, int8_calib_dataset=calibration_dataset, strict_type_constraints=True)
+            trt_fn = partial(torch2trt, int8_mode=True, 
+                             int8_calib_dataset=calibration_dataset, 
+                             strict_type_constraints=True)
         else:
             trt_fn = partial(torch2trt, fp16_mode=True, strict_type_constraints=True)
 
         x = torch.ones((1, 256, 69, 69)).cuda()
         self.proto_net = trt_fn(self.proto_net, [x])
+
+    def to_tensorrt_fpn(self, int8_mode=False, calibration_dataset=None):
+        if int8_mode:
+            trt_fn = partial(torch2trt, int8_mode=True, 
+                             int8_calib_dataset=calibration_dataset, 
+                             strict_type_constraints=True)
+        else:
+            trt_fn = partial(torch2trt, fp16_mode=True, strict_type_constraints=True)
+
+        x = [
+             torch.randn(1, 512, 69, 69).cuda(),
+             torch.randn(1, 1024, 35, 35).cuda(),
+             torch.randn(1, 2048, 18, 18).cuda(),
+             ]
+
+        self.fpn = trt_fn(self.fpn, x)
 
 
 # # Some testing code
@@ -990,12 +1015,7 @@ class Yolact(nn.Module):
         # pass
 
 
-# intermediate_inputs = []
-
-# def forward_hook(self, inputs, outputs):
-    # intermediate_inputs.append(list(inputs))
-
-# # Testing code for NAS FPN
+# # Testing code for FPN
 # if __name__ == '__main__':
     # cfg.fpn.use_conv_downsample = True
     # cfg.fpn.num_downsample = 2
@@ -1010,37 +1030,12 @@ class Yolact(nn.Module):
             # torch.randn(1, 1024, 18, 18).cuda(),
             # ]
 
-    # fpn = NASFPN(in_channels).cuda()
+    # fpn = FPN(in_channels).cuda()
     # fpn.eval()
 
-    # for m in fpn.lat_layers:
-        # m.register_forward_hook(forward_hook)
+    # fpn = torch2trt(fpn, convouts)
 
-    # for m in fpn.downsample_layers:
-        # m.register_forward_hook(forward_hook)
+    # outs = fpn(*convouts)
 
-    # for stage in fpn.fpn_stages:
-        # for name, m in stage.items():
-            # m.register_forward_hook(forward_hook)
-
-    # # for stage in fpn.fpn_stages:
-        # # for name, m in stage.items():
-            # # print(name, m.branch_1, m.branch_2)
-
-    # outs = fpn(convouts)
     # for out in outs:
-        # print(out.size())
-
-    # int_index = 0
-
-    # for i in range(len(fpn.lat_layers)):
-        # fpn.lat_layers[i] = torch2trt(fpn.lat_layers[i], intermediate_inputs[int_index])
-        # int_index += 1
-
-    # for i in range(len(fpn.downsample_layers)):
-        # fpn.downsample_layers[i] = torch2trt(fpn.downsample_layers[i], intermediate_inputs[int_index])
-        # int_index += 1
-
-    # outs = fpn(convouts)
-    # for out in outs:
-        # print(out.size())
+        # print(out.shape)

@@ -386,39 +386,6 @@ class FPN(ScriptModuleWrapper):
         self.relu_downsample_layers = cfg.fpn.relu_downsample_layers
         self.relu_pred_layers       = cfg.fpn.relu_pred_layers
 
-
-    def to_tensorrt(self, int8_mode=False):
-        """Converts all the prediction and lat layers to a TRTModule
-        """
-        if int8_mode:
-            trt_fn = partial(torch2trt, int8_mode=True, strict_type_constraints=True)
-        else:
-            trt_fn = partial(torch2trt, fp16_mode=True, strict_type_constraints=True)
-
-        x = torch.ones((1, 256, 18, 18)).cuda()
-        self.pred_layers[0] = trt_fn(self.pred_layers[0], [x])
-
-        x = torch.ones((1, 256, 35, 35)).cuda()
-        self.pred_layers[1] = trt_fn(self.pred_layers[1], [x])
-
-        x = torch.ones((1, 256, 69, 69)).cuda()
-        self.pred_layers[2] = trt_fn(self.pred_layers[2], [x])
-
-        # x = torch.ones((1, 2048, 18, 18)).cuda()
-        # x = torch.ones((1, 160, 18, 18)).cuda()
-        x = torch.ones((1, self.src_channels[2], 18, 18)).cuda()
-        self.lat_layers[0] = trt_fn(self.lat_layers[0], [x])
-
-        # x = torch.ones((1, 1024, 35, 35)).cuda()
-        # x = torch.ones((1, 64, 35, 35)).cuda()
-        x = torch.ones((1, self.src_channels[1], 35, 35)).cuda()
-        self.lat_layers[1] = trt_fn(self.lat_layers[1], [x])
-
-        # x = torch.ones((1, 512, 69, 69)).cuda()
-        # x = torch.ones((1, 32, 69, 69)).cuda()
-        x = torch.ones((1, self.src_channels[0], 69, 69)).cuda()
-        self.lat_layers[2] = trt_fn(self.lat_layers[2], [x])
-
     # TODO: This is commented since the FPN is incompatible with TensorRT.
     # @script_method_wrapper
     # def forward(self, convouts:List[torch.Tensor]):

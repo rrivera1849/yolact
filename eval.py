@@ -1183,18 +1183,22 @@ if __name__ == '__main__':
             handle_3.remove()
             handle_4.remove()
 
-        # if args.torch2trt_fpn_int8:
-            # calibration_fpn_dataset = []
+        if args.torch2trt_fpn_int8:
+            calibration_fpn_dataset = []
 
-            # def forward_hook(self, inputs, outputs):
-                # calibration_fpn_dataset.append(inputs)
+            tmp_fpn_dataset = []
+            def forward_hook(self, inputs, outputs):
+                tmp_fpn_dataset.append(inputs)
 
-            # handle = net.fpn.register_forward_hook(forward_hook)
+            handle = net.fpn.register_forward_hook(forward_hook)
 
-            # net(calibration_dataset)
-            # calibration_fpn_dataset = [x[0] for x in calibration_fpn_dataset]
+            net(calibration_dataset)
+            dataset_indices = list(range(args.torch2trt_max_calibration_images))
 
-            # handle.remove()
+            for idx in range(args.torch2trt_max_calibration_images):
+                calibration_fpn_dataset.append([x[idx] for x in tmp_fpn_dataset[0]])
+
+            handle.remove()
 
         if args.torch2trt_backbone or args.torch2trt_backbone_int8:
             net.to_tensorrt_backbone(args.torch2trt_backbone_int8, calibration_dataset=calibration_dataset)
@@ -1203,7 +1207,6 @@ if __name__ == '__main__':
             net.to_tensorrt_protonet(args.torch2trt_protonet_int8, calibration_dataset=calibration_protonet_dataset)
             
         if args.torch2trt_fpn or args.torch2trt_fpn_int8:
-            # net.fpn.to_tensorrt(args.torch2trt_fpn_int8)
             net.to_tensorrt_fpn(args.torch2trt_fpn_int8, calibration_dataset=calibration_fpn_dataset)
 
         if args.torch2trt_prediction_module or args.torch2trt_prediction_module_int8:

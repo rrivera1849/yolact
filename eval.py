@@ -1210,8 +1210,7 @@ if __name__ == '__main__':
             net.to_tensorrt_fpn(args.torch2trt_fpn_int8, calibration_dataset=calibration_fpn_dataset)
 
         if args.torch2trt_prediction_module or args.torch2trt_prediction_module_int8:
-            for prediction_layer in net.prediction_layers:
-                prediction_layer.to_tensorrt(args.torch2trt_prediction_module_int8, calibration_dataset=calibration_ph_dataset)
+            net.to_tensorrt_prediction_head(args.torch2trt_prediction_module_int8)
 
         print(' Done.')
 

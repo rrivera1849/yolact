@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.models.resnet import Bottleneck
 from torch2trt import torch2trt
+from torch2trt.torch2trt import TRTModule
 import numpy as np
 from copy import deepcopy
 from functools import partial
@@ -20,6 +21,8 @@ from backbone import construct_backbone
 import torch.backends.cudnn as cudnn
 from utils import timer
 from utils.functions import MovingAverage, make_net
+
+import os
 
 # This is required for Pytorch 1.0.1 on Windows to initialize Cuda on some driver versions.
 # See the bug report here: https://github.com/pytorch/pytorch/issues/17108
@@ -49,6 +52,7 @@ class Concat(nn.Module):
         return torch.cat([net(x) for net in self.nets], dim=1, **self.extra_params)
 
 prior_cache = defaultdict(lambda: None)
+
 
 class PredictionModule(nn.Module):
     """
@@ -117,7 +121,8 @@ class PredictionModule(nn.Module):
             # What is this ugly lambda doing in the middle of all this clean prediction module code?
             def make_extra(num_layers):
                 if num_layers == 0:
-                    return lambda x: x
+                    # return lambda x: x
+                    return nn.Identity()
                 else:
                     # Looks more complicated than it is. This just creates an array of num_layers alternating conv-relu
                     return nn.Sequential(*sum([[
@@ -890,6 +895,32 @@ class Yolact(nn.Module):
 
             return self.detect(pred_outs, self)
 
+    def _get_trt_cache_path(self, module_name, int8_mode=False):
+        return "{}.{}{}.trt".format(self.model_path, module_name, ".int8" if int8_mode else "")
+
+    def load_trt_cached_module(self, module_name, int8_mode=False):
+        module_path = self._get_trt_cache_path(module_name, int8_mode)
+        if not os.path.isfile(module_path):
+            return None
+        module = TRTModule()
+        module.load_state_dict(torch.load(module_path))
+        return module
+
+    def save_trt_cached_module(self, module, module_name, int8_mode=False):
+        module_path = self._get_trt_cache_path(module_name, int8_mode)
+        torch.save(module.state_dict(), module_path)
+
+    def trt_load_if(self, module_name, trt_fn, trt_fn_params, int8_mode=False, parent=None):
+        if parent is None: parent=self
+        module = getattr(parent, module_name)
+        trt_cache = self.load_trt_cached_module(module_name, int8_mode)
+        if trt_cache is None:
+            module = trt_fn(module, trt_fn_params)
+            self.save_trt_cached_module(module, module_name, int8_mode)
+        else:
+            module = trt_cache
+
+        setattr(parent, module_name, module)
 
     def to_tensorrt_backbone(self, int8_mode=False, calibration_dataset=None):
         """Converts the Backbone to a TRTModule.
@@ -903,8 +934,8 @@ class Yolact(nn.Module):
 
 
         x = torch.ones((1, 3, cfg.max_size, cfg.max_size)).cuda()
-        self.backbone = trt_fn(self.backbone, [x])
-
+        # self.backbone = trt_fn(self.backbone, [x])
+        self.trt_load_if("backbone", trt_fn, [x], int8_mode)
 
     def to_tensorrt_protonet(self, int8_mode=False, calibration_dataset=None):
         """Converts ProtoNet to a TRTModule.
@@ -917,7 +948,8 @@ class Yolact(nn.Module):
             trt_fn = partial(torch2trt, fp16_mode=True, strict_type_constraints=True)
 
         x = torch.ones((1, 256, 69, 69)).cuda()
-        self.proto_net = trt_fn(self.proto_net, [x])
+        # self.proto_net = trt_fn(self.proto_net, [x])
+        self.trt_load_if("proto_net", trt_fn, [x], int8_mode)
 
     def to_tensorrt_fpn(self, int8_mode=False, calibration_dataset=None):
         if int8_mode:
@@ -933,8 +965,8 @@ class Yolact(nn.Module):
              torch.randn(1, 2048, 18, 18).cuda(),
              ]
 
-        self.fpn = trt_fn(self.fpn, x)
-
+        # self.fpn = trt_fn(self.fpn, x)
+        self.trt_load_if("fpn", trt_fn, x, int8_mode)
 
 # # Some testing code
 # if __name__ == '__main__':

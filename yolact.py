@@ -433,7 +433,6 @@ class PredictionModuleTRT(nn.Module):
 
     def make_priors(self, conv_h, conv_w):
         """ Note that priors are [x,y,width,height] where (x,y) is the center of the box. """
-
         with timer.env('makepriors'):
             if self.last_conv_size != (conv_w, conv_h):
                 prior_data = []
@@ -486,11 +485,11 @@ class PredictionModuleTRTWrapper(nn.Module):
         pred_layer_w = pred_layer.parent[0] if pred_layer.parent[0] is not None else pred_layer
         self.pred_layer.load_state_dict(pred_layer_w.state_dict())
 
-    def to_tensorrt(self, int8_mode=False):
+    def to_tensorrt(self, int8_mode=False, calibration_dataset=None):
         if int8_mode:
-            trt_fn = partial(torch2trt, int8_mode=True, strict_type_constraints=True)
+            trt_fn = partial(torch2trt, int8_mode=True, strict_type_constraints=True, int8_calib_dataset=calibration_dataset)
         else:
-            trt_fn = partial(torch2trt, fp16_mode=True, strict_type_constraints=True)
+            trt_fn = partial(torch2trt, fp16_mode=True, strict_type_constraints=True, int8_calib_dataset=calibration_dataset)
 
         input_sizes = [
                 (1, 256, 69, 69),
@@ -504,12 +503,21 @@ class PredictionModuleTRTWrapper(nn.Module):
         self.pred_layer_torch = self.pred_layer
         self.pred_layer = trt_fn(self.pred_layer, [x])
 
+        self.priors_computed = False
+
     def forward(self, x):
         conv_h = x.size(2)
         conv_w = x.size(3)
 
         bbox, conf, mask = self.pred_layer(x)
-        priors = self.pred_layer_torch.make_priors(conv_h, conv_w)
+
+        if self.priors_computed:
+            priors = self.pred_layer_torch.priors
+        else:
+            priors = self.pred_layer_torch.make_priors(conv_h, conv_w)
+            self.priors_computed = True
+
+        # priors = self.pred_layer_torch.make_priors(conv_h, conv_w)
 
         preds = { 'loc': bbox, 'conf': conf, 'mask': mask, 'priors': priors }
 
@@ -581,6 +589,11 @@ class FPN(ScriptModuleWrapper):
 
         out = []
         x = torch.zeros(1, device=convouts[0].device)
+
+        # # Hacky conversion
+        # if 'Half' in convouts[0].type():
+            # x = x.half()
+
         for i in range(len(convouts)):
             out.append(x)
 
@@ -964,7 +977,8 @@ class Yolact(nn.Module):
         if cfg.fpn is not None:
             with timer.env('fpn'):
                 # Use backbone.selected_layers because we overwrote self.selected_layers
-                outs = [outs[i] for i in cfg.backbone.selected_layers]
+                if not (len(outs) == len(cfg.backbone.selected_layers)):
+                    outs = [outs[i] for i in cfg.backbone.selected_layers]
 
                 # outs = self.fpn(outs)
                 outs = self.fpn(*outs)
@@ -1067,6 +1081,12 @@ class Yolact(nn.Module):
                 else:
                     pred_outs['conf'] = F.softmax(pred_outs['conf'], -1)
 
+            # # Make sure that Priors are HalfTensor's, this is hacky!
+            # if 'Half' in pred_outs['loc'].type():
+                # pred_outs['priors'] = pred_outs['priors'].half()
+
+            # pred_outs['priors'] = pred_outs['priors'].half()
+
             return self.detect(pred_outs, self)
 
     def _get_trt_cache_path(self, module_name, int8_mode=False):
@@ -1141,17 +1161,18 @@ class Yolact(nn.Module):
 
         self.trt_load_if("fpn", trt_fn, x, int8_mode)
 
-    def to_tensorrt_prediction_head(self, int8_mode=False):
+    def to_tensorrt_prediction_head(self, int8_mode=False, calibration_dataset=None):
          """Converts Prediction Head to a TRTModule.
          """
          for idx, pred_layer in enumerate(self.prediction_layers):
              pred_layer = PredictionModuleTRTWrapper(pred_layer)
-             pred_layer.to_tensorrt()
+
+             if calibration_dataset is not None:
+                pred_layer.to_tensorrt(int8_mode, calibration_dataset[idx])
+             else:
+                pred_layer.to_tensorrt(int8_mode)
+
              self.prediction_layers[idx] = pred_layer
-             # prediction_layer.to_tensorrt(int8_mode)
-         # x = torch.ones((1, 256, 69, 69)).cuda()
-         # self.proto_net = trt_fn(self.proto_net, [x])
-         # self.trt_load_if("proto_net", trt_fn, [x], int8_mode)
 
 # # Some testing code
 # if __name__ == '__main__':

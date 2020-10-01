@@ -151,6 +151,16 @@ def parse_args(argv=None):
     if args.seed is not None:
         random.seed(args.seed)
 
+
+def use_trt():
+    # If any of the modules is FP16, we will convert the batches to FP16.
+    use_trt = args.torch2trt_backbone or args.torch2trt_protonet or \
+        args.torch2trt_fpn or args.torch2trt_prediction_module or \
+        args.torch2trt_backbone_int8 or args.torch2trt_protonet_int8 or \
+        args.torch2trt_fpn_int8 or args.torch2trt_prediction_module_int8
+
+    return use_trt
+
 iou_thresholds = [x / 100 for x in range(50, 100, 5)]
 coco_cats = {} # Call prep_coco_cats to fill this
 coco_cats_inv = {}
@@ -953,12 +963,12 @@ def evaluate(net:Yolact, dataset, train_mode=False):
         dataset_indices.sort(key=lambda x: hashed[x])
 
 
+    # Probably not necessary to do this for TRT
     if args.torch2trt_backbone_int8:
         calib_total = args.torch2trt_max_calibration_images
         dataset_indices = dataset_indices[calib_total:dataset_size+calib_total]
     else:
         dataset_indices = dataset_indices[:dataset_size]
-
 
     try:
         # Main eval loop
@@ -979,6 +989,9 @@ def evaluate(net:Yolact, dataset, train_mode=False):
                     batch = batch.cuda()
 
             with timer.env('Network Extra'):
+                # if use_trt():
+                    # batch = batch.half()
+
                 preds = net(batch)
             # Perform the meat of the operation here depending on our mode.
             if args.display:
@@ -1134,6 +1147,14 @@ if __name__ == '__main__':
         net.load_weights(args.trained_model)
         net.eval()
 
+        # if use_trt():
+            # net.detect.use_fast_nms = args.fast_nms
+            # net.detect.use_cross_class_nms = args.cross_class_nms
+            # net.half()
+
+        # Required for TRT
+        net.model_path = args.trained_model
+
         calibration_dataset = None
         calibration_protonet_dataset = None
         calibration_ph_dataset = None
@@ -1144,11 +1165,12 @@ if __name__ == '__main__':
             dataset_indices = list(range(args.torch2trt_max_calibration_images))
             dataset_indices = dataset_indices[:args.torch2trt_max_calibration_images]
             calibration_dataset = [dataset.pull_item(image_idx)[0] for image_idx in dataset_indices]
+            # calibration_dataset = torch.stack(calibration_dataset).half()
             calibration_dataset = torch.stack(calibration_dataset)
 
             if args.cuda:
                 calibration_dataset = calibration_dataset.cuda()
-    
+
         if args.torch2trt_protonet_int8:
             calibration_protonet_dataset = []
 
@@ -1193,12 +1215,28 @@ if __name__ == '__main__':
             handle = net.fpn.register_forward_hook(forward_hook)
 
             net(calibration_dataset)
-            dataset_indices = list(range(args.torch2trt_max_calibration_images))
 
             for idx in range(args.torch2trt_max_calibration_images):
                 calibration_fpn_dataset.append([x[idx] for x in tmp_fpn_dataset[0]])
 
             handle.remove()
+
+        if args.torch2trt_prediction_module_int8:
+            calibration_ph_dataset = []
+
+            def forward_hook(self, inputs, outputs):
+                calibration_ph_dataset.append(inputs)
+
+            handles = []
+            for prediction_layer in net.prediction_layers:
+                h = prediction_layer.register_forward_hook(forward_hook)
+                handles.append(h)
+
+            net(calibration_dataset)
+            calibration_ph_dataset = [x[0] for x in calibration_ph_dataset]
+
+            for h in handles:
+                h.remove()
 
         if args.torch2trt_backbone or args.torch2trt_backbone_int8:
             net.to_tensorrt_backbone(args.torch2trt_backbone_int8, calibration_dataset=calibration_dataset)
@@ -1210,7 +1248,7 @@ if __name__ == '__main__':
             net.to_tensorrt_fpn(args.torch2trt_fpn_int8, calibration_dataset=calibration_fpn_dataset)
 
         if args.torch2trt_prediction_module or args.torch2trt_prediction_module_int8:
-            net.to_tensorrt_prediction_head(args.torch2trt_prediction_module_int8)
+            net.to_tensorrt_prediction_head(args.torch2trt_prediction_module_int8, calibration_dataset=calibration_ph_dataset)
 
         print(' Done.')
 

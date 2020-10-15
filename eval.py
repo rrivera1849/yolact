@@ -299,7 +299,7 @@ def prep_display(dets_out, img, h, w, undo_transform=True, class_color=False, ma
 
 def prep_benchmark(dets_out, h, w):
     with timer.env('Postprocess'):
-        t = postprocess(dets_out, w, h, crop_masks=args.crop, score_threshold=args.score_threshold)
+        t = postprocess(dets_out, w, h, crop_masks=args.crop, score_threshold=args.score_threshold, top_k=args.top_k)
 
     with timer.env('Copy'):
         classes, scores, boxes, masks = [x[:args.top_k] for x in t]

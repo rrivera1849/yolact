@@ -13,7 +13,7 @@ from utils import timer
 from .box_utils import crop, sanitize_coordinates
 
 def postprocess(det_output, w, h, batch_idx=0, interpolation_mode='bilinear',
-                visualize_lincomb=False, crop_masks=True, score_threshold=0):
+                visualize_lincomb=False, crop_masks=True, score_threshold=0, top_k=0):
     """
     Postprocesses the output of Yolact on testing mode into a format that makes sense,
     accounting for all the possible configuration settings.
@@ -49,6 +49,11 @@ def postprocess(det_output, w, h, batch_idx=0, interpolation_mode='bilinear',
         if dets['score'].size(0) == 0:
             return [torch.Tensor()] * 4
     
+    if top_k > 0:
+        for k in dets:
+            if k != 'proto':
+                dets[k] = dets[k][:top_k]
+
     # Actually extract everything from dets now
     classes = dets['class']
     boxes   = dets['box']

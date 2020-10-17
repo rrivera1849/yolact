@@ -321,10 +321,7 @@ def prep_display(dets_out, img, h, w, undo_transform=True, class_color=False, ma
 
 def prep_benchmark(dets_out, h, w):
     with timer.env('Postprocess'):
-        if isolate and not args.isolate_postprocess:
-            t = postprocess_outs
-        else:
-            t = postprocess(dets_out, w, h, crop_masks=args.crop, score_threshold=args.score_threshold)
+        t = postprocess(dets_out, w, h, crop_masks=args.crop, score_threshold=args.score_threshold)
 
     with timer.env('Copy'):
         classes, scores, boxes, masks = [x[:args.top_k] for x in t]
@@ -1280,27 +1277,6 @@ if __name__ == '__main__':
 
         if args.cuda:
             net = net.cuda()
-
-        if isolate_module():
-            sample_input = dataset.pull_item(0)[0].unsqueeze(0).cuda()
-
-            net.detect.use_fast_nms = args.fast_nms
-            preds = net(sample_input, save_outputs=True)
-
-            global isolate
-            global postprocess_outs 
-            isolate = isolate_module()
-
-            cfg.mask_proto_debug = args.mask_proto_debug
-            t = postprocess(preds, 550, 550, crop_masks=args.crop, score_threshold=args.score_threshold)
-            postprocess_outs = deepcopy(t)
-
-            net.isolate = True
-            net.isolate_backbone = args.isolate_backbone
-            net.isolate_fpn = args.isolate_fpn
-            net.isolate_proto_net = args.isolate_proto_net
-            net.isolate_prediction_module = args.isolate_prediction_module
-            net.isolate_detect = args.isolate_detect
 
         evaluate(net, dataset)
 

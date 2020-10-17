@@ -523,18 +523,15 @@ class PredictionModuleTRTWrapper(nn.Module):
 
         return preds
 
-
 class FPN(ScriptModuleWrapper):
     """
     Implements a general version of the FPN introduced in
     https://arxiv.org/pdf/1612.03144.pdf
-
     Parameters (in cfg.fpn):
         - num_features (int): The number of output features in the fpn layers.
         - interpolation_mode (str): The mode to pass to F.interpolate.
         - num_downsample (int): The number of downsampled layers to add onto the selected layers.
                                 These extra layers are downsampled from the last selected layer.
-
     Args:
         - in_channels (list): For each conv layer you supply in the forward pass,
                               how many features will it have?
@@ -590,6 +587,10 @@ class FPN(ScriptModuleWrapper):
         out = []
         x = torch.zeros(1, device=convouts[0].device)
 
+        # # Hacky conversion
+        # if 'Half' in convouts[0].type():
+            # x = x.half()
+
         for i in range(len(convouts)):
             out.append(x)
 
@@ -631,7 +632,6 @@ class FPN(ScriptModuleWrapper):
                 out[idx] = F.relu(out[idx + cur_idx], inplace=False)
 
         return out
-
 
 class NASFPN(nn.Module):
     """
@@ -960,7 +960,7 @@ class Yolact(nn.Module):
                 module.bias.requires_grad = enable
 
 
-    def forward(self, x, save_outputs=False):
+    def forward(self, x):
         """ The input should be of size [batch_size, 3, img_h, img_w] """
 
         _, _, img_h, img_w = x.size()
@@ -968,13 +968,7 @@ class Yolact(nn.Module):
         cfg._tmp_img_w = img_w
 
         with timer.env('backbone'):
-            if self.isolate and not self.isolate_backbone:
-                outs = self.backbone_outs
-            else:
-                outs = self.backbone(x)
-
-            if save_outputs:
-                self.backbone_outs = deepcopy(outs)
+            outs = self.backbone(x)
 
         if cfg.fpn is not None:
             with timer.env('fpn'):
@@ -983,13 +977,7 @@ class Yolact(nn.Module):
                     outs = [outs[i] for i in cfg.backbone.selected_layers]
 
                 # outs = self.fpn(outs)
-                if self.isolate and not self.isolate_fpn:
-                    outs = self.fpn_outs
-                else:
-                    outs = self.fpn(*outs)
-
-                if save_outputs:
-                    self.fpn_outs = deepcopy(outs)
+                outs = self.fpn(*outs)
 
         proto_out = None
         if cfg.mask_type == mask_type.lincomb and cfg.eval_mask_branch:
@@ -1000,13 +988,7 @@ class Yolact(nn.Module):
                     grids = self.grid.repeat(proto_x.size(0), 1, 1, 1)
                     proto_x = torch.cat([proto_x, grids], dim=1)
 
-                if self.isolate and not self.isolate_proto_net:
-                    proto_out = self.proto_outs 
-                else:
-                    proto_out = self.proto_net(proto_x)
-
-                if save_outputs:
-                    self.proto_outs = deepcopy(proto_out)
+                proto_out = self.proto_net(proto_x)
 
                 proto_out = cfg.mask_proto_prototype_activation(proto_out)
 
@@ -1027,39 +1009,35 @@ class Yolact(nn.Module):
 
 
         with timer.env('pred_heads'):
-
-            if self.isolate and not self.isolate_prediction_module:
-                pred_outs = self.pred_outs
-            else:
-                pred_outs = { 'loc': [], 'conf': [], 'mask': [], 'priors': [] }
+            pred_outs = { 'loc': [], 'conf': [], 'mask': [], 'priors': [] }
 
 
-                if cfg.use_mask_scoring:
-                    pred_outs['score'] = []
+            if cfg.use_mask_scoring:
+                pred_outs['score'] = []
 
-                if cfg.use_instance_coeff:
-                    pred_outs['inst'] = []
+            if cfg.use_instance_coeff:
+                pred_outs['inst'] = []
+            
+            for idx, pred_layer in zip(self.selected_layers, self.prediction_layers):
+                pred_x = outs[idx]
+
+                if cfg.mask_type == mask_type.lincomb and cfg.mask_proto_prototypes_as_features:
+                    # Scale the prototypes down to the current prediction layer's size and add it as inputs
+                    proto_downsampled = F.interpolate(proto_downsampled, size=outs[idx].size()[2:], mode='bilinear', align_corners=False)
+                    pred_x = torch.cat([pred_x, proto_downsampled], dim=1)
+
+                # TODO
+                # A hack for the way dataparallel works
+                # if cfg.share_prediction_module and pred_layer is not self.prediction_layers[0]:
+                    # pred_layer.parent = [self.prediction_layers[0]]
+
+                p = pred_layer(pred_x)
                 
-                for idx, pred_layer in zip(self.selected_layers, self.prediction_layers):
-                    pred_x = outs[idx]
+                for k, v in p.items():
+                    pred_outs[k].append(v)
 
-                    if cfg.mask_type == mask_type.lincomb and cfg.mask_proto_prototypes_as_features:
-                        # Scale the prototypes down to the current prediction layer's size and add it as inputs
-                        proto_downsampled = F.interpolate(proto_downsampled, size=outs[idx].size()[2:], mode='bilinear', align_corners=False)
-                        pred_x = torch.cat([pred_x, proto_downsampled], dim=1)
-
-                    # TODO
-                    # A hack for the way dataparallel works
-                    # if cfg.share_prediction_module and pred_layer is not self.prediction_layers[0]:
-                        # pred_layer.parent = [self.prediction_layers[0]]
-
-                    p = pred_layer(pred_x)
-                    
-                    for k, v in p.items():
-                        pred_outs[k].append(v)
-
-                for k, v in pred_outs.items():
-                    pred_outs[k] = torch.cat(v, -2)
+            for k, v in pred_outs.items():
+                pred_outs[k] = torch.cat(v, -2)
 
 
         if proto_out is not None:
@@ -1072,9 +1050,6 @@ class Yolact(nn.Module):
 
             if cfg.use_semantic_segmentation_loss:
                 pred_outs['segm'] = self.semantic_seg_conv(outs[0])
-
-            if save_outputs:
-                self.pred_outs = deepcopy(pred_outs)
 
             return pred_outs
         else:
@@ -1105,45 +1080,33 @@ class Yolact(nn.Module):
                 else:
                     pred_outs['conf'] = F.softmax(pred_outs['conf'], -1)
 
-            if save_outputs:
-                self.pred_outs = deepcopy(pred_outs)
-
-            if self.isolate and not self.isolate_detect:
-                detect = [{}]
-                detect[0]['net'] = self.detect_outs[0]['net']
-                detect[0]['detection'] = deepcopy(self.detect_outs[0]['detection'])
-            else:
-                detect = self.detect(pred_outs, self)
-
-            if save_outputs:
-                self.detect_outs = [{}]
-                self.detect_outs[0]['net'] = detect[0]['net']
-                self.detect_outs[0]['detection'] = deepcopy(detect[0]['detection'])
+            detect = self.detect(pred_outs, self)
 
             return detect
 
-    def _get_trt_cache_path(self, module_name, int8_mode=False):
-        return "{}.{}{}.trt".format(self.model_path, module_name, ".int8" if int8_mode else "")
+    def _get_trt_cache_path(self, module_name, int8_mode=False, num_calib_images=0):
+        trt_cache_path = "{}.{}{}.trt".format(self.model_path, module_name, ".int8_{}".format(num_calib_images) if int8_mode else "")
+        return trt_cache_path
 
-    def load_trt_cached_module(self, module_name, int8_mode=False):
-        module_path = self._get_trt_cache_path(module_name, int8_mode)
+    def load_trt_cached_module(self, module_name, int8_mode=False, num_calib_images=0):
+        module_path = self._get_trt_cache_path(module_name, int8_mode, num_calib_images)
         if not os.path.isfile(module_path):
             return None
         module = TRTModule()
         module.load_state_dict(torch.load(module_path))
         return module
 
-    def save_trt_cached_module(self, module, module_name, int8_mode=False):
-        module_path = self._get_trt_cache_path(module_name, int8_mode)
+    def save_trt_cached_module(self, module, module_name, int8_mode=False, num_calib_images=0):
+        module_path = self._get_trt_cache_path(module_name, int8_mode, num_calib_images)
         torch.save(module.state_dict(), module_path)
 
-    def trt_load_if(self, module_name, trt_fn, trt_fn_params, int8_mode=False, parent=None):
+    def trt_load_if(self, module_name, trt_fn, trt_fn_params, int8_mode=False, parent=None, num_calib_images=0):
         if parent is None: parent=self
         module = getattr(parent, module_name)
-        trt_cache = self.load_trt_cached_module(module_name, int8_mode)
+        trt_cache = self.load_trt_cached_module(module_name, int8_mode, num_calib_images)
         if trt_cache is None:
             module = trt_fn(module, trt_fn_params)
-            self.save_trt_cached_module(module, module_name, int8_mode)
+            self.save_trt_cached_module(module, module_name, int8_mode, num_calib_images)
         else:
             module = trt_cache
 
@@ -1162,7 +1125,8 @@ class Yolact(nn.Module):
 
         x = torch.ones((1, 3, cfg.max_size, cfg.max_size)).cuda()
         # self.backbone = trt_fn(self.backbone, [x])
-        self.trt_load_if("backbone", trt_fn, [x], int8_mode)
+        num_calib_images =  len(calibration_dataset) if int8_mode else 0
+        self.trt_load_if("backbone", trt_fn, [x], int8_mode, num_calib_images=num_calib_images)
 
     def to_tensorrt_protonet(self, int8_mode=False, calibration_dataset=None):
         """Converts ProtoNet to a TRTModule.
@@ -1176,7 +1140,8 @@ class Yolact(nn.Module):
 
         x = torch.ones((1, 256, 69, 69)).cuda()
         # self.proto_net = trt_fn(self.proto_net, [x])
-        self.trt_load_if("proto_net", trt_fn, [x], int8_mode)
+        num_calib_images =  len(calibration_dataset) if int8_mode else 0
+        self.trt_load_if("proto_net", trt_fn, [x], int8_mode, num_calib_images=num_calib_images)
 
     def to_tensorrt_fpn(self, int8_mode=False, calibration_dataset=None):
         if int8_mode:
@@ -1192,7 +1157,8 @@ class Yolact(nn.Module):
              torch.randn(1, 2048, 18, 18).cuda(),
              ]
 
-        self.trt_load_if("fpn", trt_fn, x, int8_mode)
+        num_calib_images =  len(calibration_dataset) if int8_mode else 0
+        self.trt_load_if("fpn", trt_fn, x, int8_mode, num_calib_images=num_calib_images)
 
     def to_tensorrt_prediction_head(self, int8_mode=False, calibration_dataset=None):
          """Converts Prediction Head to a TRTModule.

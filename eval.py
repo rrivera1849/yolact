@@ -22,6 +22,7 @@ import pickle
 import json
 import os
 from collections import defaultdict
+from copy import deepcopy
 from pathlib import Path
 from collections import OrderedDict
 from PIL import Image
@@ -138,6 +139,20 @@ def parse_args(argv=None):
     parser.add_argument('--torch2trt_prediction_module_int8', default=False, action='store_true',
                         help='Converts the PredictionModule to a TRTModule with INT8 weights.')
 
+    # Isolate computation options
+    parser.add_argument("--isolate_backbone", default=False, action="store_true",
+                        help="Isolate the backbone computation.")
+    parser.add_argument("--isolate_fpn", default=False, action="store_true",
+                        help="Isolate the fpn computation.")
+    parser.add_argument("--isolate_proto_net", default=False, action="store_true",
+                        help="Isolate the proto net computation.")
+    parser.add_argument("--isolate_prediction_module", default=False, action="store_true",
+                        help="Isolate the prediction module computation.")
+    parser.add_argument("--isolate_detect", default=False, action="store_true",
+                        help="Isolate the detect computation.")
+    parser.add_argument("--isolate_postprocess", default=False, action="store_true",
+                        help="Isolate the postprocess computation.")
+
     parser.set_defaults(no_bar=False, display=False, resume=False, output_coco_json=False, output_web_json=False, shuffle=False,
                         benchmark=False, no_sort=False, no_hash=False, mask_proto_debug=False, crop=True, detect=False, display_fps=False,
                         emulate_playback=False)
@@ -160,6 +175,13 @@ def use_trt():
         args.torch2trt_fpn_int8 or args.torch2trt_prediction_module_int8
 
     return use_trt
+
+def isolate_module():
+    """Returns whether any of the isolate options are on. 
+    """
+    return args.isolate_backbone or args.isolate_fpn or \
+           args.isolate_proto_net or args.isolate_prediction_module or \
+           args.isolate_detect or args.isolate_postprocess
 
 iou_thresholds = [x / 100 for x in range(50, 100, 5)]
 coco_cats = {} # Call prep_coco_cats to fill this
@@ -299,7 +321,10 @@ def prep_display(dets_out, img, h, w, undo_transform=True, class_color=False, ma
 
 def prep_benchmark(dets_out, h, w):
     with timer.env('Postprocess'):
-        t = postprocess(dets_out, w, h, crop_masks=args.crop, score_threshold=args.score_threshold)
+        if isolate and not args.isolate_postprocess:
+            t = postprocess_outs
+        else:
+            t = postprocess(dets_out, w, h, crop_masks=args.crop, score_threshold=args.score_threshold)
 
     with timer.env('Copy'):
         classes, scores, boxes, masks = [x[:args.top_k] for x in t]
@@ -989,10 +1014,8 @@ def evaluate(net:Yolact, dataset, train_mode=False):
                     batch = batch.cuda()
 
             with timer.env('Network Extra'):
-                # if use_trt():
-                    # batch = batch.half()
-
                 preds = net(batch)
+
             # Perform the meat of the operation here depending on our mode.
             if args.display:
                 img_numpy = prep_display(preds, img, h, w)
@@ -1147,10 +1170,12 @@ if __name__ == '__main__':
         net.load_weights(args.trained_model)
         net.eval()
 
-        # if use_trt():
-            # net.detect.use_fast_nms = args.fast_nms
-            # net.detect.use_cross_class_nms = args.cross_class_nms
-            # net.half()
+        net.isolate = False
+        net.isolate_backbone = False
+        net.isolate_fpn = False
+        net.isolate_proto_net = False
+        net.isolate_prediction_module = False
+        net.isolate_detect = False
 
         # Required for TRT
         net.model_path = args.trained_model
@@ -1160,12 +1185,13 @@ if __name__ == '__main__':
         calibration_ph_dataset = None
         calibration_fpn_dataset = None
 
-        if args.torch2trt_backbone_int8:
+        if args.torch2trt_backbone_int8 or args.torch2trt_fpn_int8 or \
+                args.torch2trt_protonet_int8 or args.torch2trt_prediction_module_int8:
+
             print('Calibrating with {} images...'.format(args.torch2trt_max_calibration_images))
             dataset_indices = list(range(args.torch2trt_max_calibration_images))
             dataset_indices = dataset_indices[:args.torch2trt_max_calibration_images]
             calibration_dataset = [dataset.pull_item(image_idx)[0] for image_idx in dataset_indices]
-            # calibration_dataset = torch.stack(calibration_dataset).half()
             calibration_dataset = torch.stack(calibration_dataset)
 
             if args.cuda:
@@ -1254,6 +1280,27 @@ if __name__ == '__main__':
 
         if args.cuda:
             net = net.cuda()
+
+        if isolate_module():
+            sample_input = dataset.pull_item(0)[0].unsqueeze(0).cuda()
+
+            net.detect.use_fast_nms = args.fast_nms
+            preds = net(sample_input, save_outputs=True)
+
+            global isolate
+            global postprocess_outs 
+            isolate = isolate_module()
+
+            cfg.mask_proto_debug = args.mask_proto_debug
+            t = postprocess(preds, 550, 550, crop_masks=args.crop, score_threshold=args.score_threshold)
+            postprocess_outs = deepcopy(t)
+
+            net.isolate = True
+            net.isolate_backbone = args.isolate_backbone
+            net.isolate_fpn = args.isolate_fpn
+            net.isolate_proto_net = args.isolate_proto_net
+            net.isolate_prediction_module = args.isolate_prediction_module
+            net.isolate_detect = args.isolate_detect
 
         evaluate(net, dataset)
 

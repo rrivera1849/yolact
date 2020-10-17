@@ -39,6 +39,7 @@ def postprocess(det_output, w, h, batch_idx=0, interpolation_mode='bilinear',
     if dets is None:
         return [torch.Tensor()] * 4 # Warning, this is 4 copies of the same thing
 
+    # with timer.env('postprocess_threshold'):
     if score_threshold > 0:
         keep = dets['score'] > score_threshold
 
@@ -66,10 +67,12 @@ def postprocess(det_output, w, h, batch_idx=0, interpolation_mode='bilinear',
         if visualize_lincomb:
             display_lincomb(proto_data, masks)
 
+        # with timer.env('postprocess_masks'):
         masks = proto_data @ masks.t()
         masks = cfg.mask_proto_mask_activation(masks)
 
         # Crop masks before upsampling because you know why
+        # with timer.env('postprocess_crop'):
         if crop_masks:
             masks = crop(masks, boxes)
 
@@ -87,6 +90,7 @@ def postprocess(det_output, w, h, batch_idx=0, interpolation_mode='bilinear',
                         else:
                             scores = [scores, scores * maskiou_p]
 
+        # with timer.env('postprocess_interpolate_and_binarize'):
         # Scale masks up to the full image
         masks = F.interpolate(masks.unsqueeze(0), (h, w), mode=interpolation_mode, align_corners=False).squeeze(0)
 
@@ -94,10 +98,12 @@ def postprocess(det_output, w, h, batch_idx=0, interpolation_mode='bilinear',
         masks.gt_(0.5)
 
     
+    # with timer.env('postprocess_sanitize'):
     boxes[:, 0], boxes[:, 2] = sanitize_coordinates(boxes[:, 0], boxes[:, 2], w, cast=False)
     boxes[:, 1], boxes[:, 3] = sanitize_coordinates(boxes[:, 1], boxes[:, 3], h, cast=False)
     boxes = boxes.long()
 
+    # with timer.env('postprocess_full_masks'):
     if cfg.mask_type == mask_type.direct and cfg.eval_mask_branch:
         # Upscale masks
         full_masks = torch.zeros(masks.size(0), h, w)

@@ -590,10 +590,6 @@ class FPN(ScriptModuleWrapper):
         out = []
         x = torch.zeros(1, device=convouts[0].device)
 
-        # # Hacky conversion
-        # if 'Half' in convouts[0].type():
-            # x = x.half()
-
         for i in range(len(convouts)):
             out.append(x)
 
@@ -964,7 +960,7 @@ class Yolact(nn.Module):
                 module.bias.requires_grad = enable
 
 
-    def forward(self, x):
+    def forward(self, x, save_outputs=False):
         """ The input should be of size [batch_size, 3, img_h, img_w] """
 
         _, _, img_h, img_w = x.size()
@@ -972,7 +968,13 @@ class Yolact(nn.Module):
         cfg._tmp_img_w = img_w
 
         with timer.env('backbone'):
-            outs = self.backbone(x)
+            if self.isolate and not self.isolate_backbone:
+                outs = self.backbone_outs
+            else:
+                outs = self.backbone(x)
+
+            if save_outputs:
+                self.backbone_outs = deepcopy(outs)
 
         if cfg.fpn is not None:
             with timer.env('fpn'):
@@ -981,7 +983,13 @@ class Yolact(nn.Module):
                     outs = [outs[i] for i in cfg.backbone.selected_layers]
 
                 # outs = self.fpn(outs)
-                outs = self.fpn(*outs)
+                if self.isolate and not self.isolate_fpn:
+                    outs = self.fpn_outs
+                else:
+                    outs = self.fpn(*outs)
+
+                if save_outputs:
+                    self.fpn_outs = deepcopy(outs)
 
         proto_out = None
         if cfg.mask_type == mask_type.lincomb and cfg.eval_mask_branch:
@@ -992,7 +1000,14 @@ class Yolact(nn.Module):
                     grids = self.grid.repeat(proto_x.size(0), 1, 1, 1)
                     proto_x = torch.cat([proto_x, grids], dim=1)
 
-                proto_out = self.proto_net(proto_x)
+                if self.isolate and not self.isolate_proto_net:
+                    proto_out = self.proto_outs 
+                else:
+                    proto_out = self.proto_net(proto_x)
+
+                if save_outputs:
+                    self.proto_outs = deepcopy(proto_out)
+
                 proto_out = cfg.mask_proto_prototype_activation(proto_out)
 
                 if cfg.mask_proto_prototypes_as_features:
@@ -1012,34 +1027,40 @@ class Yolact(nn.Module):
 
 
         with timer.env('pred_heads'):
-            pred_outs = { 'loc': [], 'conf': [], 'mask': [], 'priors': [] }
 
-            if cfg.use_mask_scoring:
-                pred_outs['score'] = []
+            if self.isolate and not self.isolate_prediction_module:
+                pred_outs = self.pred_outs
+            else:
+                pred_outs = { 'loc': [], 'conf': [], 'mask': [], 'priors': [] }
 
-            if cfg.use_instance_coeff:
-                pred_outs['inst'] = []
-            
-            for idx, pred_layer in zip(self.selected_layers, self.prediction_layers):
-                pred_x = outs[idx]
 
-                if cfg.mask_type == mask_type.lincomb and cfg.mask_proto_prototypes_as_features:
-                    # Scale the prototypes down to the current prediction layer's size and add it as inputs
-                    proto_downsampled = F.interpolate(proto_downsampled, size=outs[idx].size()[2:], mode='bilinear', align_corners=False)
-                    pred_x = torch.cat([pred_x, proto_downsampled], dim=1)
+                if cfg.use_mask_scoring:
+                    pred_outs['score'] = []
 
-                # TODO
-                # A hack for the way dataparallel works
-                # if cfg.share_prediction_module and pred_layer is not self.prediction_layers[0]:
-                    # pred_layer.parent = [self.prediction_layers[0]]
-
-                p = pred_layer(pred_x)
+                if cfg.use_instance_coeff:
+                    pred_outs['inst'] = []
                 
-                for k, v in p.items():
-                    pred_outs[k].append(v)
+                for idx, pred_layer in zip(self.selected_layers, self.prediction_layers):
+                    pred_x = outs[idx]
 
-        for k, v in pred_outs.items():
-            pred_outs[k] = torch.cat(v, -2)
+                    if cfg.mask_type == mask_type.lincomb and cfg.mask_proto_prototypes_as_features:
+                        # Scale the prototypes down to the current prediction layer's size and add it as inputs
+                        proto_downsampled = F.interpolate(proto_downsampled, size=outs[idx].size()[2:], mode='bilinear', align_corners=False)
+                        pred_x = torch.cat([pred_x, proto_downsampled], dim=1)
+
+                    # TODO
+                    # A hack for the way dataparallel works
+                    # if cfg.share_prediction_module and pred_layer is not self.prediction_layers[0]:
+                        # pred_layer.parent = [self.prediction_layers[0]]
+
+                    p = pred_layer(pred_x)
+                    
+                    for k, v in p.items():
+                        pred_outs[k].append(v)
+
+                for k, v in pred_outs.items():
+                    pred_outs[k] = torch.cat(v, -2)
+
 
         if proto_out is not None:
             pred_outs['proto'] = proto_out
@@ -1051,6 +1072,9 @@ class Yolact(nn.Module):
 
             if cfg.use_semantic_segmentation_loss:
                 pred_outs['segm'] = self.semantic_seg_conv(outs[0])
+
+            if save_outputs:
+                self.pred_outs = deepcopy(pred_outs)
 
             return pred_outs
         else:
@@ -1081,13 +1105,22 @@ class Yolact(nn.Module):
                 else:
                     pred_outs['conf'] = F.softmax(pred_outs['conf'], -1)
 
-            # # Make sure that Priors are HalfTensor's, this is hacky!
-            # if 'Half' in pred_outs['loc'].type():
-                # pred_outs['priors'] = pred_outs['priors'].half()
+            if save_outputs:
+                self.pred_outs = deepcopy(pred_outs)
 
-            # pred_outs['priors'] = pred_outs['priors'].half()
+            if self.isolate and not self.isolate_detect:
+                detect = [{}]
+                detect[0]['net'] = self.detect_outs[0]['net']
+                detect[0]['detection'] = deepcopy(self.detect_outs[0]['detection'])
+            else:
+                detect = self.detect(pred_outs, self)
 
-            return self.detect(pred_outs, self)
+            if save_outputs:
+                self.detect_outs = [{}]
+                self.detect_outs[0]['net'] = detect[0]['net']
+                self.detect_outs[0]['detection'] = deepcopy(detect[0]['detection'])
+
+            return detect
 
     def _get_trt_cache_path(self, module_name, int8_mode=False):
         return "{}.{}{}.trt".format(self.model_path, module_name, ".int8" if int8_mode else "")

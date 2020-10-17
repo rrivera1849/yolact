@@ -382,7 +382,7 @@ class DarkNetBackbone(nn.Module):
         for i, layer in enumerate(self.layers):
             x = layer(x)
 
-            add_to_outputs(self, outs, x, i, ignore=True)
+            add_to_outputs(self, outs, x, i, ignore=False)
 
         return tuple(outs)
 

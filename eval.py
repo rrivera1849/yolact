@@ -1262,15 +1262,19 @@ if __name__ == '__main__':
                 h.remove()
 
         if args.torch2trt_backbone or args.torch2trt_backbone_int8:
+            print("TRT Backbone")
             net.to_tensorrt_backbone(args.torch2trt_backbone_int8, calibration_dataset=calibration_dataset)
 
         if args.torch2trt_protonet or args.torch2trt_protonet_int8:
+            print("TRT ProtoNet")
             net.to_tensorrt_protonet(args.torch2trt_protonet_int8, calibration_dataset=calibration_protonet_dataset)
             
         if args.torch2trt_fpn or args.torch2trt_fpn_int8:
+            print("TRT FPN")
             net.to_tensorrt_fpn(args.torch2trt_fpn_int8, calibration_dataset=calibration_fpn_dataset)
 
         if args.torch2trt_prediction_module or args.torch2trt_prediction_module_int8:
+            print("TRT Prediction Module")
             net.to_tensorrt_prediction_head(args.torch2trt_prediction_module_int8, calibration_dataset=calibration_ph_dataset)
 
         print(' Done.')

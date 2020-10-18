@@ -603,7 +603,7 @@ coco_base_config = Config({
     # Top_k examples to consider for NMS
     'nms_top_k': 200,
     # Examples with confidence less than this are not considered by NMS
-    'nms_conf_thresh': 0.05,
+    'nms_conf_thresh': 0.15,
     # Boxes with IoU overlap greater than this threshold will be culled during NMS
     'nms_thresh': 0.5,
 

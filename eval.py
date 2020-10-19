@@ -1167,12 +1167,8 @@ if __name__ == '__main__':
         net.load_weights(args.trained_model)
         net.eval()
 
-        net.isolate = False
-        net.isolate_backbone = False
-        net.isolate_fpn = False
-        net.isolate_proto_net = False
-        net.isolate_prediction_module = False
-        net.isolate_detect = False
+        if args.cuda:
+            net = net.cuda()
 
         # Required for TRT
         net.model_path = args.trained_model
@@ -1278,9 +1274,6 @@ if __name__ == '__main__':
             net.to_tensorrt_prediction_head(args.torch2trt_prediction_module_int8, calibration_dataset=calibration_ph_dataset)
 
         print(' Done.')
-
-        if args.cuda:
-            net = net.cuda()
 
         evaluate(net, dataset)
 

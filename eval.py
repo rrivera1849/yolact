@@ -204,7 +204,8 @@ def prep_display(dets_out, img, h, w, undo_transform=True, class_color=False, ma
         cfg.rescore_bbox = True
         t = postprocess(dets_out, w, h, visualize_lincomb = args.display_lincomb,
                                         crop_masks        = args.crop,
-                                        score_threshold   = args.score_threshold)
+                                        score_threshold   = args.score_threshold,
+                                        top_k = args.top_k)
         cfg.rescore_bbox = save
 
     with timer.env('Copy'):
@@ -321,7 +322,7 @@ def prep_display(dets_out, img, h, w, undo_transform=True, class_color=False, ma
 
 def prep_benchmark(dets_out, h, w):
     with timer.env('Postprocess'):
-        t = postprocess(dets_out, w, h, crop_masks=args.crop, score_threshold=args.score_threshold)
+        t = postprocess(dets_out, w, h, crop_masks=args.crop, score_threshold=args.score_threshold, top_k=args.top_k)
 
     with timer.env('Copy'):
         classes, scores, boxes, masks = [x[:args.top_k] for x in t]
@@ -458,7 +459,8 @@ def prep_metrics(ap_data, dets, img, gt, gt_masks, h, w, num_crowd, image_id, de
                 crowd_classes, gt_classes = split(gt_classes)
 
     with timer.env('Postprocess'):
-        classes, scores, boxes, masks = postprocess(dets, w, h, crop_masks=args.crop, score_threshold=args.score_threshold)
+        classes, scores, boxes, masks = postprocess(dets, w, h, crop_masks=args.crop, score_threshold=args.score_threshold, 
+                                                    top_k=args.top_k)
 
         if classes.size(0) == 0:
             return

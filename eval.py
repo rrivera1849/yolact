@@ -139,20 +139,6 @@ def parse_args(argv=None):
     parser.add_argument('--torch2trt_prediction_module_int8', default=False, action='store_true',
                         help='Converts the PredictionModule to a TRTModule with INT8 weights.')
 
-    # Isolate computation options
-    parser.add_argument("--isolate_backbone", default=False, action="store_true",
-                        help="Isolate the backbone computation.")
-    parser.add_argument("--isolate_fpn", default=False, action="store_true",
-                        help="Isolate the fpn computation.")
-    parser.add_argument("--isolate_proto_net", default=False, action="store_true",
-                        help="Isolate the proto net computation.")
-    parser.add_argument("--isolate_prediction_module", default=False, action="store_true",
-                        help="Isolate the prediction module computation.")
-    parser.add_argument("--isolate_detect", default=False, action="store_true",
-                        help="Isolate the detect computation.")
-    parser.add_argument("--isolate_postprocess", default=False, action="store_true",
-                        help="Isolate the postprocess computation.")
-
     parser.set_defaults(no_bar=False, display=False, resume=False, output_coco_json=False, output_web_json=False, shuffle=False,
                         benchmark=False, no_sort=False, no_hash=False, mask_proto_debug=False, crop=True, detect=False, display_fps=False,
                         emulate_playback=False)
@@ -176,13 +162,6 @@ def use_trt():
 
     return use_trt
 
-def isolate_module():
-    """Returns whether any of the isolate options are on. 
-    """
-    return args.isolate_backbone or args.isolate_fpn or \
-           args.isolate_proto_net or args.isolate_prediction_module or \
-           args.isolate_detect or args.isolate_postprocess
-
 iou_thresholds = [x / 100 for x in range(50, 100, 5)]
 coco_cats = {} # Call prep_coco_cats to fill this
 coco_cats_inv = {}
@@ -204,8 +183,8 @@ def prep_display(dets_out, img, h, w, undo_transform=True, class_color=False, ma
         cfg.rescore_bbox = True
         t = postprocess(dets_out, w, h, visualize_lincomb = args.display_lincomb,
                                         crop_masks        = args.crop,
-                                        score_threshold   = args.score_threshold,
-                                        top_k = args.top_k)
+                                        score_threshold   = args.score_threshold)
+
         cfg.rescore_bbox = save
 
     with timer.env('Copy'):
@@ -322,7 +301,7 @@ def prep_display(dets_out, img, h, w, undo_transform=True, class_color=False, ma
 
 def prep_benchmark(dets_out, h, w):
     with timer.env('Postprocess'):
-        t = postprocess(dets_out, w, h, crop_masks=args.crop, score_threshold=args.score_threshold, top_k=args.top_k)
+        t = postprocess(dets_out, w, h, crop_masks=args.crop, score_threshold=args.score_threshold)
 
     with timer.env('Copy'):
         classes, scores, boxes, masks = [x[:args.top_k] for x in t]
@@ -459,8 +438,7 @@ def prep_metrics(ap_data, dets, img, gt, gt_masks, h, w, num_crowd, image_id, de
                 crowd_classes, gt_classes = split(gt_classes)
 
     with timer.env('Postprocess'):
-        classes, scores, boxes, masks = postprocess(dets, w, h, crop_masks=args.crop, score_threshold=args.score_threshold, 
-                                                    top_k=args.top_k)
+        classes, scores, boxes, masks = postprocess(dets, w, h, crop_masks=args.crop, score_threshold=args.score_threshold)
 
         if classes.size(0) == 0:
             return
@@ -969,6 +947,7 @@ def evaluate(net:Yolact, dataset, train_mode=False):
         detections = Detections()
     else:
         timer.disable('Load Data')
+        timer.disable('Copy')
 
     dataset_indices = list(range(len(dataset)))
     
@@ -1169,12 +1148,8 @@ if __name__ == '__main__':
         net.load_weights(args.trained_model)
         net.eval()
 
-        net.isolate = False
-        net.isolate_backbone = False
-        net.isolate_fpn = False
-        net.isolate_proto_net = False
-        net.isolate_prediction_module = False
-        net.isolate_detect = False
+        if args.cuda:
+            net = net.cuda()
 
         # Required for TRT
         net.model_path = args.trained_model
@@ -1280,9 +1255,6 @@ if __name__ == '__main__':
             net.to_tensorrt_prediction_head(args.torch2trt_prediction_module_int8, calibration_dataset=calibration_ph_dataset)
 
         print(' Done.')
-
-        if args.cuda:
-            net = net.cuda()
 
         evaluate(net, dataset)
 

@@ -49,11 +49,6 @@ def postprocess(det_output, w, h, batch_idx=0, interpolation_mode='bilinear',
         
         if dets['score'].size(0) == 0:
             return [torch.Tensor()] * 4
-
-    if top_k > 0:
-        for k in dets:
-            if k != 'proto':
-                dets[k] = dets[k][:top_k]
     
     # Actually extract everything from dets now
     classes = dets['class']

@@ -1178,7 +1178,10 @@ if __name__ == '__main__':
                 calibration_protonet_dataset.append(inputs)
 
             handle = net.proto_net.register_forward_hook(forward_hook)
-            net(calibration_dataset)
+            
+            with torch.no_grad():
+                net(calibration_dataset)
+
             handle.remove()
 
             calibration_protonet_dataset = calibration_protonet_dataset[0][0]
@@ -1197,7 +1200,9 @@ if __name__ == '__main__':
             handle_3 = net.prediction_layers[0].conf_layer.register_forward_hook(forward_hook)
             handle_4 = net.prediction_layers[0].mask_layer.register_forward_hook(forward_hook)
 
-            net(calibration_dataset)
+            with torch.no_grad():
+                net(calibration_dataset)
+
             calibration_ph_dataset = [x[0] for x in calibration_ph_dataset]
 
             handle_1.remove()
@@ -1214,7 +1219,8 @@ if __name__ == '__main__':
 
             handle = net.fpn.register_forward_hook(forward_hook)
 
-            net(calibration_dataset)
+            with torch.no_grad():
+                net(calibration_dataset)
 
             for idx in range(args.torch2trt_max_calibration_images):
                 calibration_fpn_dataset.append([x[idx] for x in tmp_fpn_dataset[0]])
@@ -1232,7 +1238,9 @@ if __name__ == '__main__':
                 h = prediction_layer.register_forward_hook(forward_hook)
                 handles.append(h)
 
-            net(calibration_dataset)
+            with torch.no_grad():
+                net(calibration_dataset)
+
             calibration_ph_dataset = [x[0] for x in calibration_ph_dataset]
 
             for h in handles:

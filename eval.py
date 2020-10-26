@@ -30,6 +30,8 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import cv2
 
+import math
+
 def str2bool(v):
     if v.lower() in ('yes', 'true', 't', 'y', '1'):
         return True
@@ -1146,10 +1148,8 @@ if __name__ == '__main__':
         print('Loading model...', end='')
         net = Yolact()
         net.load_weights(args.trained_model)
+        net.cpu()
         net.eval()
-
-        if args.cuda:
-            net = net.cuda()
 
         # Required for TRT
         net.model_path = args.trained_model
@@ -1158,6 +1158,24 @@ if __name__ == '__main__':
         calibration_protonet_dataset = None
         calibration_ph_dataset = None
         calibration_fpn_dataset = None
+        # Number of images to evaluate per batch when creating the calibration dataset.
+        n_images_per_batch = 1
+
+        if args.cuda:
+            net = net.cuda()
+
+        # class CalibrationDataset(object):
+        #     """Used for handling large calibration datasets. 
+        #        Source: https://github.com/NVIDIA-AI-IOT/torch2trt/pull/168
+        #     """
+        #     def __init__(self, calibration_data):
+        #         self.calibration_data = calibration_data
+
+        #     def __getitem__(self, index):
+        #         return self.calibration_data[index].cuda()
+
+        #     def __len__(self):
+        #         return len(self.calibration_data)
 
         if args.torch2trt_backbone_int8 or args.torch2trt_fpn_int8 or \
                 args.torch2trt_protonet_int8 or args.torch2trt_prediction_module_int8:
@@ -1175,40 +1193,16 @@ if __name__ == '__main__':
             calibration_protonet_dataset = []
 
             def forward_hook(self, inputs, outputs):
-                calibration_protonet_dataset.append(inputs)
+                calibration_protonet_dataset.append(inputs[0])
 
             handle = net.proto_net.register_forward_hook(forward_hook)
             
             with torch.no_grad():
-                net(calibration_dataset)
+                for i in range(math.ceil(args.torch2trt_max_calibration_images / n_images_per_batch)):
+                    net(calibration_dataset[i*n_images_per_batch:(i+1)*n_images_per_batch])
 
             handle.remove()
-
-            calibration_protonet_dataset = calibration_protonet_dataset[0][0]
-
-        if args.torch2trt_prediction_module_int8:
-            if not cfg.share_prediction_module:
-                raise ValueError("INT8 Prediction Module not supported without shared heads.")
-
-            calibration_ph_dataset = []
-
-            def forward_hook(self, inputs, outputs):
-                calibration_ph_dataset.append(inputs)
-
-            handle_1 = net.prediction_layers[0].upfeature.register_forward_hook(forward_hook)
-            handle_2 = net.prediction_layers[0].bbox_layer.register_forward_hook(forward_hook)
-            handle_3 = net.prediction_layers[0].conf_layer.register_forward_hook(forward_hook)
-            handle_4 = net.prediction_layers[0].mask_layer.register_forward_hook(forward_hook)
-
-            with torch.no_grad():
-                net(calibration_dataset)
-
-            calibration_ph_dataset = [x[0] for x in calibration_ph_dataset]
-
-            handle_1.remove()
-            handle_2.remove()
-            handle_3.remove()
-            handle_4.remove()
+            calibration_protonet_dataset = torch.cat(calibration_protonet_dataset, dim=0)
 
         if args.torch2trt_fpn_int8:
             calibration_fpn_dataset = []
@@ -1225,6 +1219,7 @@ if __name__ == '__main__':
             for idx in range(args.torch2trt_max_calibration_images):
                 calibration_fpn_dataset.append([x[idx] for x in tmp_fpn_dataset[0]])
 
+            import pdb; pdb.set_trace()
             handle.remove()
 
         if args.torch2trt_prediction_module_int8:
@@ -1246,6 +1241,7 @@ if __name__ == '__main__':
             for h in handles:
                 h.remove()
 
+
         if args.torch2trt_backbone or args.torch2trt_backbone_int8:
             print("TRT Backbone")
             net.to_tensorrt_backbone(args.torch2trt_backbone_int8, calibration_dataset=calibration_dataset)
@@ -1253,7 +1249,7 @@ if __name__ == '__main__':
         if args.torch2trt_protonet or args.torch2trt_protonet_int8:
             print("TRT ProtoNet")
             net.to_tensorrt_protonet(args.torch2trt_protonet_int8, calibration_dataset=calibration_protonet_dataset)
-            
+
         if args.torch2trt_fpn or args.torch2trt_fpn_int8:
             print("TRT FPN")
             net.to_tensorrt_fpn(args.torch2trt_fpn_int8, calibration_dataset=calibration_fpn_dataset)

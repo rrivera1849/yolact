@@ -1139,11 +1139,9 @@ if __name__ == '__main__':
             dataset = COCODetection(cfg.dataset.valid_images, cfg.dataset.valid_info,
                                     transform=BaseTransform(), has_gt=cfg.dataset.has_gt)
             prep_coco_cats()
-        elif args.torch2trt_backbone_int8:
-            dataset = COCODetection(cfg.dataset.valid_images, cfg.dataset.valid_info,
-                                    transform=BaseTransform(), has_gt=cfg.dataset.has_gt)
         else:
             dataset = None        
+
 
         print('Loading model...', end='')
         net = Yolact()
@@ -1164,26 +1162,16 @@ if __name__ == '__main__':
         if args.cuda:
             net = net.cuda()
 
-        # class CalibrationDataset(object):
-        #     """Used for handling large calibration datasets. 
-        #        Source: https://github.com/NVIDIA-AI-IOT/torch2trt/pull/168
-        #     """
-        #     def __init__(self, calibration_data):
-        #         self.calibration_data = calibration_data
-
-        #     def __getitem__(self, index):
-        #         return self.calibration_data[index].cuda()
-
-        #     def __len__(self):
-        #         return len(self.calibration_data)
 
         if args.torch2trt_backbone_int8 or args.torch2trt_fpn_int8 or \
                 args.torch2trt_protonet_int8 or args.torch2trt_prediction_module_int8:
 
+            calibration = COCODetection(cfg.dataset.train_images, cfg.dataset.train_info,
+                                        transform=BaseTransform(), has_gt=cfg.dataset.has_gt)
+
             print('Calibrating with {} images...'.format(args.torch2trt_max_calibration_images))
             dataset_indices = list(range(args.torch2trt_max_calibration_images))
-            dataset_indices = dataset_indices[:args.torch2trt_max_calibration_images]
-            calibration_dataset = [dataset.pull_item(image_idx)[0] for image_idx in dataset_indices]
+            calibration_dataset = [calibration.pull_item(image_idx)[0] for image_idx in dataset_indices]
             calibration_dataset = torch.stack(calibration_dataset)
 
             if args.cuda:
@@ -1219,7 +1207,6 @@ if __name__ == '__main__':
             for idx in range(args.torch2trt_max_calibration_images):
                 calibration_fpn_dataset.append([x[idx] for x in tmp_fpn_dataset[0]])
 
-            import pdb; pdb.set_trace()
             handle.remove()
 
         if args.torch2trt_prediction_module_int8:

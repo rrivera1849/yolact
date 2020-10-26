@@ -1166,8 +1166,20 @@ if __name__ == '__main__':
         if args.torch2trt_backbone_int8 or args.torch2trt_fpn_int8 or \
                 args.torch2trt_protonet_int8 or args.torch2trt_prediction_module_int8:
 
+            # Save the old dataset configuration just in case we need to restore.
+            old_dataset = deepcopy(cfg.dataset)
+
+            # Set dataset to COCO 2017 otherwise when we're evaluating on test-dev this will fail
+            set_dataset("coco2017_dataset")
             calibration = COCODetection(cfg.dataset.train_images, cfg.dataset.train_info,
                                         transform=BaseTransform(), has_gt=cfg.dataset.has_gt)
+
+            # Revert dataset back to what it's supposed to be: 
+            if args.dataset is not None:
+                set_dataset(args.dataset)
+            else:
+                cfg.dataset = old_dataset
+
 
             print('Calibrating with {} images...'.format(args.torch2trt_max_calibration_images))
             dataset_indices = list(range(args.torch2trt_max_calibration_images))

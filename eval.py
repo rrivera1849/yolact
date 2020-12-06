@@ -681,8 +681,7 @@ def evalvideo(net:Yolact, path:str, out_path:str=None):
     cudnn.benchmark = True
     
     if is_webcam:
-        # vid = cv2.VideoCapture(int(path))
-        vid = cv2.VideoCapture(-1)
+        vid = cv2.VideoCapture(int(path))
     else:
         vid = cv2.VideoCapture(path)
     
@@ -1180,7 +1179,6 @@ if __name__ == '__main__':
             else:
                 cfg.dataset = old_dataset
 
-
             print('Calibrating with {} images...'.format(args.torch2trt_max_calibration_images))
             dataset_indices = list(range(args.torch2trt_max_calibration_images))
             calibration_dataset = [calibration.pull_item(image_idx)[0] for image_idx in dataset_indices]
@@ -1188,6 +1186,7 @@ if __name__ == '__main__':
 
             if args.cuda:
                 calibration_dataset = calibration_dataset.cuda()
+
 
         if args.torch2trt_protonet_int8:
             calibration_protonet_dataset = []

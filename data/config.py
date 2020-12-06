@@ -1,6 +1,6 @@
 from backbone import BasicBlock, ResNetBackbone, \
                      VGGBackbone, ResNetBackboneGN, DarkNetBackbone, \
-                     MobileNetV2Backbone, MobileNetV3Backbone, HarDNetBackbone
+                     MobileNetV2Backbone
 
 from math import sqrt
 import torch
@@ -112,11 +112,11 @@ dataset_base = Config({
     'name': 'Base Dataset',
 
     # Training images and annotations
-    'train_images': '/data/haotian-data/coco/images/',
+    'train_images': './data/data/coco/images/',
     'train_info':   'path_to_annotation_file',
 
     # Validation images and annotations.
-    'valid_images': '/data/haotian-data/coco/images/',
+    'valid_images': './data/data/coco/images/',
     'valid_info':   'path_to_annotation_file',
 
     # Whether or not to load GT. If this is False, eval.py quantitative evaluation won't work.
@@ -134,8 +134,8 @@ dataset_base = Config({
 coco2014_dataset = dataset_base.copy({
     'name': 'COCO 2014',
     
-    'train_info': '/data/haotian-data/coco/annotations/instances_train2014.json',
-    'valid_info': '/data/haotian-data/coco/annotations/instances_val2014.json',
+    'train_info': './data/data/coco/annotations/instances_train2014.json',
+    'valid_info': './data/data/coco/annotations/instances_val2014.json',
 
     'label_map': COCO_LABEL_MAP
 })
@@ -143,8 +143,8 @@ coco2014_dataset = dataset_base.copy({
 coco2017_dataset = dataset_base.copy({
     'name': 'COCO 2017',
     
-    'train_info': '/data/haotian-data/coco/annotations/instances_train2017.json',
-    'valid_info': '/data/haotian-data/coco/annotations/instances_val2017.json',
+    'train_info': './data/data/coco/annotations/instances_train2017.json',
+    'valid_info': './data/data/coco/annotations/instances_val2017.json',
 
     'label_map': COCO_LABEL_MAP
 })
@@ -152,7 +152,7 @@ coco2017_dataset = dataset_base.copy({
 coco2017_testdev_dataset = dataset_base.copy({
     'name': 'COCO 2017 Test-Dev',
 
-    'valid_info': '/home/rrivera/repos/yolact/data/coco/annotations/image_info_test-dev2017.json',
+    'valid_info': './data/data/coco/annotations/image_info_test-dev2017.json',
     'has_gt': False,
 
     'label_map': COCO_LABEL_MAP
@@ -190,29 +190,6 @@ bdd_dataset = dataset_base.copy({
     'class_names': BDD_CLASSES,
 })
 
-# CITYSCAPES_CLASSES = ('road', 'sidewalk', 'parking', 'rail track', 'pedestrian',
-                      # 'rider', 'car', 'truck', 'bus', 'static',
-                      # 'on rails', 'motorcycle', 'bicycle', 'caravan', 'trailer',
-                      # 'building', 'wall', 'fence', 'guard rail', 'bridge',
-                      # 'tunnel', 'pole', 'pole group', 'traffic sign', 'traffic light',
-                      # 'vegetation', 'terrain', 'sky', 'ground', 'dynamic')
-
-CITYSCAPES_CLASSES = ('car', 'pedestrian', 'truck', 'bus', 'rider')
-CITYSCAPES_LABEL_MAP = { 1: 1, 2: 2, 3: 3, 4: 4, 5: 5}
-
-cityscapes_dataset = dataset_base.copy({
-    'name': 'CityScapes',
-
-    'train_images': '/home/rafael/data/cityscapes/coco_format/train_images',
-    'valid_images': '/home/rafael/data/cityscapes/coco_format/val_images',
-    
-    'train_info': '/home/rafael/data/cityscapes/train.json',
-    'valid_info': '/home/rafael/data/cityscapes/val.json',
-
-    'class_names': CITYSCAPES_CLASSES,
-    'label_map': CITYSCAPES_LABEL_MAP,
-})
-
 # ----------------------- TRANSFORMS ----------------------- #
 
 resnet_transform = Config({
@@ -239,20 +216,6 @@ darknet_transform = Config({
 })
 
 mobilenetv2_transform = Config({
-    'channel_order': 'RGB',
-    'normalize': True,
-    'subtract_means': False,
-    'to_float': False,
-})
-
-mobilenetv3_transform = Config({
-    'channel_order': 'RGB',
-    'normalize': True,
-    'subtract_means': False,
-    'to_float': False,
-})
-
-hardnet_transform = Config({
     'channel_order': 'RGB',
     'normalize': True,
     'subtract_means': False,
@@ -396,49 +359,6 @@ mobilenetv2_backbone = backbone_base.copy({
     'use_square_anchors': True,
 })
 
-mobilenetv3_large_arch = [
-    # k, t, c, SE, HS, s 
-    [3,   1,  16, 0, 0, 1],
-    [3,   4,  24, 0, 0, 2],
-    [3,   3,  24, 0, 0, 1],
-    [5,   3,  40, 1, 0, 2],
-    [5,   3,  40, 1, 0, 1],
-    [5,   3,  40, 1, 0, 1],
-    [3,   6,  80, 0, 1, 2],
-    [3, 2.5,  80, 0, 1, 1],
-    [3, 2.3,  80, 0, 1, 1],
-    [3, 2.3,  80, 0, 1, 1],
-    [3,   6, 112, 1, 1, 1],
-    [3,   6, 112, 1, 1, 1],
-    [5,   6, 160, 1, 1, 2],
-    [5,   6, 160, 1, 1, 1],
-    [5,   6, 160, 1, 1, 1]
-]
-
-mobilenetv3_backbone = backbone_base.copy({
-    'name': 'MobileNetV3',
-    'path': 'mobilenetv3-large-1cd25616.pth',
-    'type': MobileNetV3Backbone,
-    'args': (mobilenetv3_large_arch, 1.0),
-    'transform': mobilenetv3_transform,
-})
-
-hardnet68_backbone = backbone_base.copy({
-    'name': 'HarDNet68',
-    'path': '',
-    'type': HarDNetBackbone,
-    'args': ('hardnet68',),
-    'transform': hardnet_transform,
-})
-
-hardnet68ds_backbone = backbone_base.copy({
-    'name': 'HarDNet68DS',
-    'path': '',
-    'type': HarDNetBackbone,
-    'args': ('hardnet68ds',),
-    'transform': hardnet_transform,
-})
-
 # ----------------------- MASK BRANCH TYPES ----------------------- #
 
 mask_type = Config({
@@ -544,22 +464,6 @@ fpn_base = Config({
 
     # Whether to add relu to the regular layers
     'relu_pred_layers': True,
-
-    ########################################
-    # YOLACT Embedded
-    ########################################
-
-    # Whether or not to use NAS-FPN instead of the regular FPN. 
-    # In this case, many of the parameters above are ignored except for 
-    # `num_features`, `interpolation_mode`, and `num_downsample`.
-    'use_nas_fpn': False,
-
-    # Number of times to stack the NAS-FPN architecture on top of itself.
-    'stack_times': 1,
-
-    # If True, will use depthwise convolutions wherever out_channels is evenly 
-    # divisible by in_channels.
-    'depthwise' : False,
 })
 
 
@@ -905,33 +809,6 @@ yolact_resnet50_config = yolact_base_config.copy({
     }),
 })
 
-yolact_resnet50_nasfpn_config = yolact_resnet50_config.copy({
-    'name': 'yolact_resnet50_nasfpn', 
-
-    # FPN Settings
-    'fpn': fpn_base.copy({
-        'use_conv_downsample': True,
-        'num_downsample': 2,
-        'use_nas_fpn': True,
-    }),
-})
-
-yolact_resnet50_cityscapes_config = yolact_resnet50_config.copy({
-    'name': 'yolact_resnet50_cityscapes',
-
-    'dataset': cityscapes_dataset,
-    'num_classes': len(cityscapes_dataset.class_names) + 1,
-
-    'max_iter': 800000,
-
-    'lr' : 1e-2,
-    'lr_steps': (30000, 80000, 150000, 220000, 300000, 380000, 450000),
-
-    'backbone': resnet50_backbone.copy({
-        'use_square_anchors': False,
-    }),
-})
-
 yolact_resnet50_pascal_config = yolact_resnet50_config.copy({
     'name': None, # Will default to yolact_resnet50_pascal
     
@@ -1020,102 +897,6 @@ yolact_mobilenetv2_config = yolact_base_config.copy({
     'name': 'yolact_mobilenetv2',
 
     'backbone': mobilenetv2_backbone
-})
-
-# yolact_mobilenetv2_bdd_config = yolact_mobilenetv2_config.copy({
-    # 'name': 'yolact_mobilenetv2_bdd_config',
-
-    # 'backbone': mobilenetv2_backbone,
-# })
-
-yolact_mobilenetv2_cityscapes_config = yolact_mobilenetv2_config.copy({
-    'name': 'yolact_mobilenetv2_cityscapes',
-
-    'dataset': cityscapes_dataset,
-    'num_classes': len(cityscapes_dataset.class_names) + 1,
-
-    'lr' : 1e-2,
-
-    'max_iter': 800000,
-    'lr_steps': (30000, 80000, 150000, 220000, 300000, 380000, 450000),
-
-    'backbone': mobilenetv2_backbone.copy({
-        'use_square_anchors': False,
-    }),
-})
-
-yolact_mobilenetv2_depthwise_config = yolact_mobilenetv2_config.copy({
-    'name': 'yolact_mobilenetv2_depthwise',
-
-    'fpn': fpn_base.copy({
-        'use_conv_downsample' : False,
-        'depthwise': True,
-        }),
-})
-
-
-yolact_mobilenetv3_config = yolact_base_config.copy({
-    'name': 'yolact_mobilenetv3',
-
-    'backbone': mobilenetv3_backbone.copy({
-        'selected_layers': [6, 12, 16],
-        
-        'pred_scales': yolact_base_config.backbone.pred_scales,
-        'pred_aspect_ratios': yolact_base_config.backbone.pred_aspect_ratios,
-        'use_pixel_scales': True,
-        'preapply_sqrt': False,
-        'use_square_anchors': True, # This is for backward compatability with a bug
-    }),
-})
-
-yolact_hardnet68_config = yolact_base_config.copy({
-    'name': 'yolact_hardnet68',
-
-    'backbone': hardnet68_backbone.copy({
-        'selected_layers': [5, 10, 13],
-        
-        'pred_scales': yolact_base_config.backbone.pred_scales,
-        'pred_aspect_ratios': yolact_base_config.backbone.pred_aspect_ratios,
-        'use_pixel_scales': True,
-        'preapply_sqrt': False,
-        'use_square_anchors': True, # This is for backward compatability with a bug
-    }),
-})
-
-yolact_hardnet68ds_config = yolact_base_config.copy({
-    'name': 'yolact_hardnet68ds',
-
-    'backbone': hardnet68ds_backbone.copy({
-        'selected_layers': [5, 10, 13],
-        
-        'pred_scales': yolact_base_config.backbone.pred_scales,
-        'pred_aspect_ratios': yolact_base_config.backbone.pred_aspect_ratios,
-        'use_pixel_scales': True,
-        'preapply_sqrt': False,
-        'use_square_anchors': True, # This is for backward compatability with a bug
-    }),
-})
-
-yolact_mobilenetv2_nasfpn_config = yolact_mobilenetv2_config.copy({
-    'name': 'yolact_mobilenetv2_nasfpn', 
-
-    # FPN Settings
-    'fpn': fpn_base.copy({
-        'use_conv_downsample': True,
-        'num_downsample': 2,
-        'use_nas_fpn': True,
-    }),
-})
-
-yolact_mobilenetv3_nasfpn_config = yolact_mobilenetv3_config.copy({
-    'name': 'yolact_mobilenetv3_nasfpn', 
-
-    # FPN Settings
-    'fpn': fpn_base.copy({
-        'use_conv_downsample': True,
-        'num_downsample': 2,
-        'use_nas_fpn': True,
-    }),
 })
 
 # Default config

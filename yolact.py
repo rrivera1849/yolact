@@ -2,8 +2,6 @@ import torch, torchvision
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.models.resnet import Bottleneck
-from torch2trt import torch2trt
-from torch2trt.torch2trt import TRTModule
 import numpy as np
 from copy import deepcopy
 from functools import partial
@@ -15,7 +13,6 @@ from collections import defaultdict
 from data.config import cfg, mask_type
 from layers import Detect
 from layers.interpolate import InterpolateModule
-from layers.nas_fpn import SumCell, GlobalPoolingCell
 from backbone import construct_backbone
 
 import torch.backends.cudnn as cudnn
@@ -24,14 +21,20 @@ from utils.functions import MovingAverage, make_net
 
 import os
 
+try:
+    from torch2trt import torch2trt
+    from torch2trt.torch2trt import TRTModule
+    use_torch2trt = True
+except:
+    use_torch2trt = False
+
+
 # This is required for Pytorch 1.0.1 on Windows to initialize Cuda on some driver versions.
 # See the bug report here: https://github.com/pytorch/pytorch/issues/17108
 torch.cuda.current_device()
 
 # As of March 10, 2019, Pytorch DataParallel still doesn't support JIT Script Modules
-# TODO: Incompatible with torch2trt, will have to find a workaround. 
-use_jit = False
-# use_jit = torch.cuda.device_count() <= 1
+use_jit = False if use_torch2trt else torch.cuda.device_count() <= 1
 
 if not use_jit:
     print('Multiple GPUs detected! Turning off JIT.')
@@ -498,8 +501,9 @@ class PredictionModuleTRTWrapper(nn.Module):
                 (1, 256, 9, 9),
                 (1, 256, 5, 5),
         ]
-
+        
         x = torch.ones(input_sizes[self.pred_layer.index]).cuda()
+
         self.pred_layer_torch = self.pred_layer
         self.pred_layer = trt_fn(self.pred_layer, [x])
 
@@ -553,14 +557,14 @@ class FPN(ScriptModuleWrapper):
         padding = 1 if cfg.fpn.pad else 0
         self.pred_layers = nn.ModuleList([
             nn.Conv2d(cfg.fpn.num_features, cfg.fpn.num_features, kernel_size=3, padding=padding, 
-                      groups=cfg.fpn.num_features if cfg.fpn.depthwise else 1)
+                      groups=1)
             for _ in in_channels
         ])
 
         if cfg.fpn.use_conv_downsample:
             self.downsample_layers = nn.ModuleList([
                 nn.Conv2d(cfg.fpn.num_features, cfg.fpn.num_features, kernel_size=3, padding=1, stride=2,
-                          groups=cfg.fpn.num_features if cfg.fpn.depthwise else 1)
+                          groups=1)
                 for _ in range(cfg.fpn.num_downsample)
             ])
         
@@ -633,124 +637,6 @@ class FPN(ScriptModuleWrapper):
 
         return out
 
-class NASFPN(nn.Module):
-    """
-    Implements the NAS-FPN architecture introduced in: 
-    https://arxiv.org/pdf/1904.07392.pdf
-
-    Note, this implementation does NOT allow for an arbitrary number of 
-    inputs like the FPN implemented above. This is because the architecture 
-    was developed using NAS and thus the inputs are fixed.
-
-    Parameters (in cfg.fpn):
-        - num_features (int): The number of output features in the fpn layers.
-        - interpolation_mode (str): The mode to pass to F.interpolate.
-        - num_downsample (int): The number of downsampled layers to add onto the selected layers.
-                                These extra layers are downsampled from the last selected layer.
-        - stack_times (int): The number of times to repeat the operations of the pyramid stack.
-    Args:
-        - in_channels (list): For each conv layer you supply in the forward pass,
-                              how many features will it have?
-    """
-
-    def __init__(self, in_channels):
-        super().__init__()
-
-        self.in_channels = in_channels
-        self.out_channels = cfg.fpn.num_features
-        self.num_ins = len(self.in_channels)
-        self.stack_times = cfg.fpn.stack_times
-        self.num_downsample = None
-
-        self.lat_layers = nn.ModuleList()
-        for x in in_channels:
-            self.lat_layers.append(nn.Sequential(
-                    nn.Conv2d(x, self.out_channels, kernel_size=1, bias=False),
-                    nn.BatchNorm2d(self.out_channels),
-                    nn.ReLU(inplace=True),
-                ))
-
-
-        if cfg.fpn.use_conv_downsample:
-            self.num_downsample = cfg.fpn.num_downsample
-            self.downsample_layers = nn.ModuleList()
-            for _ in range(self.num_downsample):
-                self.downsample_layers.append(nn.Sequential(
-                    nn.Conv2d(self.out_channels, self.out_channels, kernel_size=1),
-                    nn.BatchNorm2d(self.out_channels),
-                    nn.ReLU(inplace=True),
-                    nn.MaxPool2d(2, 2),
-                ))
-
-
-        self.fpn_stages = nn.ModuleList()
-
-        sum_cell = partial(SumCell, 
-                           self.out_channels, self.out_channels,
-                           cfg.fpn.interpolation_mode)
-
-        gp_cell = partial(GlobalPoolingCell, 
-                          self.out_channels, self.out_channels,
-                          cfg.fpn.interpolation_mode)
-
-        for _ in range(self.stack_times):
-            stage = nn.ModuleDict()
-
-            stage['gp_64_4'] = gp_cell()
-            stage['sum_44_4'] = sum_cell()
-            stage['sum_43_3'] = sum_cell()
-            stage['sum_34_4'] = sum_cell()
-            stage['gp_43_5'] = gp_cell()
-            stage['sum_55_5'] = sum_cell()
-            stage['gp_54_7'] = gp_cell()
-            stage['sum_77_7'] = sum_cell()
-            stage['gp_75_6'] = gp_cell()
-
-            self.fpn_stages.append(stage)
-
-
-    def forward(self, convouts:List[torch.Tensor]):
-
-        feats = []
-
-        for i, x in enumerate(convouts):
-            feats.append(self.lat_layers[i](x))
-
-        if self.num_downsample:
-            for i in range(self.num_downsample):
-                feats.append(self.downsample_layers[i](feats[-1]))
-
-        p3, p4, p5, p6, p7 = feats
-
-        def size_to_tensor(tensor):
-            """Quick helper function for converting the Size to a 
-               torch.Tensor that is accepted by TensorRT.
-            """
-            out = torch.tensor([tensor.shape[-2:][0], tensor.shape[-2:][1]]).type(torch.int8)
-            return out
-
-        for stage in self.fpn_stages:
-            # We convert to Tensor here because of some TensorRT nonsense 
-            # where every input must have a .clone()
-            p4_1 = stage['gp_64_4'](p6, p4, size_to_tensor(p4))
-
-            p4_2 = stage['sum_44_4'](p4_1, p4, size_to_tensor(p4))
-
-            p3 = stage['sum_43_3'](p4_2, p3, size_to_tensor(p3))
-
-            p4 = stage['sum_34_4'](p3, p4_2, size_to_tensor(p4))
-
-            p5_tmp = stage['gp_43_5'](p4, p3, size_to_tensor(p5))
-
-            p5 = stage['sum_55_5'](p5, p5_tmp, size_to_tensor(p5))
-
-            p7_tmp = stage['gp_54_7'](p5, p4_2, size_to_tensor(p7))
-
-            p7 = stage['sum_77_7'](p7, p7_tmp, size_to_tensor(p7))
-
-            p6 = stage['gp_75_6'](p7, p5, size_to_tensor(p6))
-
-        return p3, p4, p5, p6, p7
 
 class FastMaskIoUNet(ScriptModuleWrapper):
 
@@ -829,11 +715,7 @@ class Yolact(nn.Module):
             self.maskiou_net = FastMaskIoUNet()
 
         if cfg.fpn is not None:
-            # Some hacky rewiring to accomodate the FPN
-            if cfg.fpn.use_nas_fpn:
-                self.fpn = NASFPN([src_channels[i] for i in self.selected_layers])
-            else:
-                self.fpn = FPN([src_channels[i] for i in self.selected_layers])
+            self.fpn = FPN([src_channels[i] for i in self.selected_layers])
 
             self.selected_layers = list(range(len(self.selected_layers) + cfg.fpn.num_downsample))
             src_channels = [cfg.fpn.num_features] * len(self.selected_layers)
@@ -1123,9 +1005,8 @@ class Yolact(nn.Module):
         else:
             trt_fn = partial(torch2trt, fp16_mode=True, strict_type_constraints=True)
 
-
         x = torch.ones((1, 3, cfg.max_size, cfg.max_size)).cuda()
-        # self.backbone = trt_fn(self.backbone, [x])
+
         num_calib_images =  len(calibration_dataset) if int8_mode else 0
         self.trt_load_if("backbone", trt_fn, [x], int8_mode, num_calib_images=num_calib_images)
 
@@ -1140,23 +1021,33 @@ class Yolact(nn.Module):
             trt_fn = partial(torch2trt, fp16_mode=True, strict_type_constraints=True)
 
         x = torch.ones((1, 256, 69, 69)).cuda()
-        # self.proto_net = trt_fn(self.proto_net, [x])
+
         num_calib_images =  len(calibration_dataset) if int8_mode else 0
         self.trt_load_if("proto_net", trt_fn, [x], int8_mode, num_calib_images=num_calib_images)
+
 
     def to_tensorrt_fpn(self, int8_mode=False, calibration_dataset=None):
         if int8_mode:
             trt_fn = partial(torch2trt, int8_mode=True, 
                              int8_calib_dataset=calibration_dataset, 
-                             strict_type_constraints=True)
+                             strbict_type_constraints=True)
         else:
             trt_fn = partial(torch2trt, fp16_mode=True, strict_type_constraints=True)
 
-        x = [
-             torch.randn(1, 512, 69, 69).cuda(),
-             torch.randn(1, 1024, 35, 35).cuda(),
-             torch.randn(1, 2048, 18, 18).cuda(),
-             ]
+        if cfg.backbone.name == "ResNet50" or cfg.backbone.name == "ResNet101":
+            x = [
+                torch.randn(1, 512, 69, 69).cuda(),
+                torch.randn(1, 1024, 35, 35).cuda(),
+                torch.randn(1, 2048, 18, 18).cuda(),
+                ]
+        elif cfg.backbone.name == "MobileNetV2":
+            x = [
+                torch.randn(1, 32, 69, 69).cuda(),
+                torch.randn(1, 64, 35, 35).cuda(),
+                torch.randn(1, 160, 18, 18).cuda(),
+                ]
+        else:
+            raise ValueError("Backbone: {} is not currently supported with TensorRT.".format(cfg.backbone.name))
 
         num_calib_images =  len(calibration_dataset) if int8_mode else 0
         self.trt_load_if("fpn", trt_fn, x, int8_mode, num_calib_images=num_calib_images)
@@ -1173,6 +1064,7 @@ class Yolact(nn.Module):
                 pred_layer.to_tensorrt(int8_mode)
 
              self.prediction_layers[idx] = pred_layer
+
 
 # # Some testing code
 # if __name__ == '__main__':
@@ -1218,29 +1110,3 @@ class Yolact(nn.Module):
             # print('Avg fps: %.2f\tAvg ms: %.2f         ' % (1/avg.get_avg(), avg.get_avg()*1000))
     # except KeyboardInterrupt:
         # pass
-
-
-# # Testing code for FPN
-# if __name__ == '__main__':
-    # cfg.fpn.use_conv_downsample = True
-    # cfg.fpn.num_downsample = 2
-    # cfg.fpn.num_features = 256
-    # cfg.fpn.stack_times = 1
-
-    # in_channels = [256, 512, 1024]
-
-    # convouts = [
-            # torch.randn(1, 256, 69, 69).cuda(),
-            # torch.randn(1, 512, 35, 35).cuda(),
-            # torch.randn(1, 1024, 18, 18).cuda(),
-            # ]
-
-    # fpn = FPN(in_channels).cuda()
-    # fpn.eval()
-
-    # fpn = torch2trt(fpn, convouts)
-
-    # outs = fpn(*convouts)
-
-    # for out in outs:
-        # print(out.shape)
